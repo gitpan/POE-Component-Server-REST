@@ -1,0 +1,6 @@
+Revision history for Perl extension POE::Component::Server::REST.
+
+* 1.00
+
+	Fork of POE::Component::Server::SOAP by "Apocalypse"
+
