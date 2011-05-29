@@ -1,28 +1,25 @@
----
-name: POE-Component-Server-REST
-version: 1.00
-author:
-  - 'Jstebens E<lt>jstebns@cpan.orgE<gt>'
-abstract: Simple REST Server which allows binding REST API calls to POE-events.
-license: perl
-resources:
-  license: http://dev.perl.org/licenses/
+--- #YAML:1.0
+name:               POE-Component-Server-REST
+version:            1.01
+abstract:           ~
+author:  []
+license:            unknown
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
 requires:
-  Carp: 0
-  POE: 0
-  POE::Component::Server::SimpleHTTP: 1.54
-  POE::Session: 0
-  XML::Simple: 2.18
-  perl: 5.006
-dynamic_config: 0
-provides:
-  POE::Component::Server::REST:
-    file: lib/POE/Component/Server/REST.pm
-    version: 1.00
-  POE::Component::Server::REST::Response:
-    file: lib/POE/Component/Server/REST/Response.pm
-    version: 1.00
-generated_by: Module::Build version 0.280801
+    Carp:                 0
+    POE:                  0
+    POE::Component::Server::SimpleHTTP:  1.54
+    POE::Session:         0
+    XML::Simple:          2.18
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.55_02
 meta-spec:
-  url: http://module-build.sourceforge.net/META-spec-v1.2.html
-  version: 1.2
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4

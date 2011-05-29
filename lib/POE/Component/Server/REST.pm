@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 use vars qw( $VERSION );
-$VERSION = '!.00';
+$VERSION = '1.01';
 
 use Carp qw(croak);
 
@@ -790,3 +790,430 @@ sub TransactionClose {
       return;
 }
 
+1;
+__END__
+
+=head1 NAME
+
+POE::Component::Server::REST - publish POE event handlers via REST
+
+=head1 SYNOPSIS
+
+            use POE;
+            use POE::Component::Server::REST;
+
+            POE::Component::Server::REST->new(
+                    'ALIAS'         =>      'MyREST',
+                    'ADDRESS'       =>      'localhost',
+                    'PORT'          =>      32080,
+                    'HOSTNAME'      =>      'MyHost.com',
+            );
+
+            POE::Session->create(
+                    'inline_states' =>      {
+                            '_start'        =>      \&setup_service,
+                            '_stop'         =>      \&shutdown_service,
+				    'GET/things'     =>    \&get_things,
+				    'POST/thing'    =>     \&add_thing,
+				    'PUT/thing'      =>    \&upd_thing,
+				    'DELETE/thing'   =>    \&del_thing,
+				    'GET/thing'      =>    \&get_thing,
+
+                    },
+            );
+
+            $poe_kernel->run;
+            exit 0;
+
+            sub setup_service {
+                    my $kernel = $_[KERNEL];
+                    $kernel->alias_set( 'MyServer' );
+                    $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/things' );
+			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'POST/thing' );
+			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'PUT/thing' );
+			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'DELETE/thing' );
+			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/thing' );
+            }
+
+            sub shutdown_service {
+			  $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/things' );
+                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'POST/thing' );
+                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'PUT/thing' );
+                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'DELETE/thing' );
+                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/thing' );
+            }
+
+		sub get_item {
+			my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+			# Key is the last http url path fragment /foo/baz/<key>
+			my $item = $somehash->{$key} if defined $key;
+
+			if($item) {
+				$response->content( $item );
+				$kernel->post( $session, 'RAWDONE', $response );
+				return;
+			} else {
+				# session, mode, response, http_status_code, simple msg, detailed msg
+				$kernel->post( $session, 'FAULT', $response, 404, 'NotFound', 'No such item.' );
+				return;
+			}
+		}
+
+=head1 ABSTRACT
+
+	An easy to use REST daemon for POE-enabled programs
+
+=head1 DESCRIPTION
+
+This module makes serving REST requests a breeze in POE.
+
+The hardest thing to understand in this module is the REST Body. That's
+it!
+
+The standard way to use this module is to do this:
+
+		use POE;
+		use POE::Component::Server::REST;
+
+		POE::Component::Server::REST->new( ... );
+
+		POE::Session->create( ... );
+
+		POE::Kernel->run();
+
+POE::Component::Server::REST is a bolt-on component that can publish
+event handlers via REST over HTTP. Currently, this module only supports
+REST xml requests, work will be done in the future to support REST
+requests in other formats too. The HTTP server is done via
+POE::Component::Server::SimpleHTTP.
+
+=head2  Starting Server::REST
+
+To start Server::REST, just call it's new method:
+
+		POE::Component::Server::REST->new(
+				'ALIAS'         =>      'MyREST',
+				'ADDRESS'       =>      '192.168.1.1',
+				'PORT'          =>      11111,
+				'HOSTNAME'      =>      'MySite.com',
+				'HEADERS'       =>      {},
+		);
+
+This method will die on error or return success.
+
+This constructor accepts only 7 options.
+
+=over 4
+
+=item C<ALIAS>
+
+This will set the alias Server::REST uses in the POE Kernel. This
+will default to "RESTServer"
+
+=item C<ADDRESS>
+
+This value will be passed to POE::Component::Server::SimpleHTTP to
+bind to.
+
+Examples: 
+		ADDRESS => 0 # Bind to all addresses + localhost 
+		ADDRESS => 'localhost' # Bind to localhost 
+		ADDRESS => '192.168.1.1' # Bindto specified IP
+
+=item C<PORT>
+
+This value will be passed to POE::Component::Server::SimpleHTTP to
+bind to.
+
+=item C<HOSTNAME>
+
+This value is for the HTTP::Request's URI to point to. If this is
+not supplied, POE::Component::Server::SimpleHTTP will use
+Sys::Hostname to find it.
+
+=item C<HEADERS>
+
+This should be a hashref, that will become the default headers on
+all HTTP::Response objects. You can override this in individual
+requests by setting it via $response->header( ... )
+
+The default header is: Server => 'POE::Component::Server::REST/' .
+$VERSION
+
+For more information, consult the HTTP::Headers module.
+
+=item C<MUSTUNDERSTAND>
+
+This is a boolean value, controlling whether Server::REST will check
+for this value in the Headers and Fault if it is present. This will
+default to true.
+
+=item C<SIMPLEHTTP>
+
+This allows you to pass options to the SimpleHTTP backend. One of
+the real reasons is to support SSL in Server::REST, yay! To learn
+how to use SSL, please consult the
+POE::Component::Server::SimpleHTTP documentation. Of course, you
+could totally screw up things, just use this with caution :)
+
+You must pass a hash reference as the value, because it will be
+expanded and put in the Server::SimpleHTTP->new() constructor.
+
+=back
+
+=head2 Events
+
+There are only a few ways to communicate with Server::REST.
+
+=over 4
+
+=item C<ADDMETHOD>
+
+			This event accepts four arguments:
+					- The intended session alias
+					- The intended session event
+					- The public service name       ( not required -> defaults to session alias )
+					- The public method name        ( not required -> defaults to session event )
+
+			Calling this event will add the method to the registry.
+
+			NOTE: This will overwrite the old definition of a method if it exists!
+
+=item C<DELMETHOD>
+
+			This event accepts two arguments:
+					- The service name
+					- The method name
+
+			Calling this event will remove the method from the registry.
+
+			NOTE: if the service now contains no methods, it will also be removed.
+
+=item C<DELSERVICE>
+
+			This event accepts one argument:
+					- The service name
+
+			Calling this event will remove the entire service from the registry.
+
+=item C<DONE>
+
+			This event accepts only one argument: the REST::Response object we sent to the handler.
+
+			Calling this event implies that this particular request is done, and will proceed to close the socket.
+
+			NOTE: This method automatically sets some parameters:
+					- HTTP Status = 200 ( if not defined )
+					- HTTP Header value of 'Content-Type' = 'text/xml'
+
+			To get greater throughput and response time, do not post() to the DONE event, call() it!
+			However, this will force your program to block while servicing REST requests...
+
+=item C<RAWDONE>
+
+			This event accepts only one argument: the REST::Response object we sent to the handler.
+
+			Calling this event implies that this particular request is done, and will proceed to close the socket.
+
+			The only difference between this and the DONE event is that the content in $response->content() will not
+			be enclosed with an pre-defined xml result format. This is useful if you generate the xml yourself.
+
+			NOTE:
+					- The xml content does not need to have a <?xml version="1.0" encoding="UTF-8"> header
+					- If the xml is malformed or is not escaped properly, the client will get terribly confused!
+
+=item C<FAULT>
+
+			This event accepts five arguments:
+					- the HTTP::Response object we sent to the handler
+					- REST Fault Code       ( not required -> defaults to 'Server' )
+					- REST Fault String     ( not required -> defaults to 'Application Faulted' )
+					- REST Fault Detail     ( not required )
+					- REST Fault Actor      ( not required )
+
+			Again, calling this event implies that this particular request is done, and will proceed to close the socket.
+
+			Calling this event will generate a REST Fault and return it to the client.
+
+			NOTE: This method automatically sets some parameters:
+					- HTTP Status = 500 ( if not defined )
+					- HTTP Header value of 'Content-Type' = 'text/xml'
+					- HTTP Content = Xml result envelope of the fault ( overwriting anything that was there )
+
+=item C<RAWFAULT>
+
+			This event accepts only one argument: the REST::Response object we sent to the handler.
+
+			Calling this event implies that this particular request is done, and will proceed to close the socket.
+
+			The only difference between this and the FAULT event is that you are given freedom to create your own xml for the
+			fault. It will be passed through intact to the client. 
+
+			This is very similar to the RAWDONE event, so go read the notes up there!
+
+=item C<CLOSE>
+
+			This event accepts only one argument: the REST::Response object we sent to the handler.
+
+			Calling this event will proceed to close the socket, not sending any output.
+
+=item C<STARTLISTEN>
+
+			Starts the listening socket, if it was shut down
+
+=item C<STOPLISTEN>
+
+			Simply a wrapper for SHUTDOWN GRACEFUL, but will not shutdown Server::REST if there is no more requests
+
+=item C<SHUTDOWN>
+
+			Without arguments, Server::REST does this:
+					Close the listening socket
+					Kills all pending requests by closing their sockets
+					Removes it's alias
+
+			With an argument of 'GRACEFUL', Server::REST does this:
+					Close the listening socket
+					Waits for all pending requests to come in via DONE/FAULT/CLOSE, then removes it's alias
+
+=back
+
+=head2 Processing Requests
+
+if you're new to the world of REST, reading RESTful documentation is 
+recommended! 
+
+Now, once you have set up the services/methods, what do you expect from
+Server::REST? Every request is pretty straightforward, you just get a
+Server::REST::Response object in ARG0 and an optional KEY identifier in ARG1.
+
+		The Server::REST::Response object contains a wealth of information about the specified request:
+				- There is the SimpleHTTP::Connection object, which gives you connection information
+				- There is the various REST accessors provided via Server::REST::Response
+				- There is the HTTP::Request object
+
+		Example information you can get:
+				$response->connection->remote_ip()      # IP of the client
+				$response->restrequest->uri()           # Original URI
+				$response->restmethod()                 # The SOAP method that was called
+				$response->restbody()                   # The arguments to the method
+
+Simply experiment using Data::Dumper and you'll quickly get the hang of
+it!
+
+When you're done with the REST request, stuff whatever output you have
+into the content of the response object.
+
+		$response->content( 'The result is ... ' );
+
+The only thing left to do is send it off to the DONE event :)
+
+		$_[KERNEL]->post( 'MyREST', 'DONE', $response );
+
+If there's an error, you can send it to the FAULT event, which will
+convert it into a REST fault.
+
+		$_[KERNEL]->post( 'MyREST', 'FAULT', $response, 'Client.Authentication', 'Invalid password' );
+
+=head2 Server::REST Notes
+
+This module is very picky about capitalization! and was copied with the
+authorization of the owner of POE::Component::Server::SOAP :) Thanks!
+
+All of the options are uppercase, to avoid confusion.
+
+You can enable debugging mode by doing this:
+
+		sub POE::Component::Server::REST::DEBUG () { 1 }
+		use POE::Component::Server::REST;
+
+In the case you want to see the raw xml being received/sent to the
+client, set DEBUG to 2.
+
+=head2 Using SSL
+
+So you want to use SSL in Server::REST? Here's a example on how to do
+it:
+
+		POE::Component::Server::REST->new(
+				...
+				'SIMPLEHTTP'    =>      {
+						'SSLKEYCERT'    =>      [ 'public-key.pem', 'public-cert.pem' ],
+				},
+		);
+
+		# And that's it provided you've already created the necessary key + certificate file :)
+
+=head1 SUPPORT
+
+    You can find documentation for this module with the perldoc command.
+
+        perldoc POE::Component::Server::REST
+
+=head2 Websites
+
+=over 4
+
+=item    *   AnnoCPAN: Annotated CPAN documentation
+
+        L<http://annocpan.org/dist/POE-Component-Server-REST>
+
+=item    *   CPAN Ratings
+
+        L<http://cpanratings.perl.org/d/POE-Component-Server-REST>
+
+=item    *   RT: CPAN's request tracker
+
+        L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-Server-REST>
+
+=item    *   Search CPAN
+
+        L<http://search.cpan.org/dist/POE-Component-Server-REST>
+
+=back
+
+=head2  Bugs
+
+    Please report any bugs or feature requests to
+    "bug-poe-component-server-rest at rt.cpan.org", or through the web
+    interface at
+    L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-Server-REST>.
+     I will be notified, and then you'll automatically be notified of
+    progress on your bug as I make changes.
+
+=head1 SEE ALSO
+    The examples directory that came with this component.
+
+    L<POE>
+
+    L<HTTP::Response>
+
+    L<HTTP::Request>
+
+    L<POE::Component::Server::REST::Response>
+
+    L<POE::Component::Server::SimpleHTTP>
+
+    L<XML::Twig>
+
+    L<POE::Component::SSLify>
+
+=head1 AUTHOR
+
+    Jstebens <jstebens@cpan.org>
+
+    I used L<POE::Server::Component::SOAP> as base for this module and documentation.
+	There may be still L<POE::Server::Component::SOAP> artifacts spread throught the
+	documentation and code. If you find those, please let me know.
+
+	Many thanks to Larwan "Apocalypse" Berke for the approval to use his code as base!
+
+=head1 COPYRIGHT AND LICENSE
+
+    Copyright 2011 by Jstebens
+
+    This library is free software; you can redistribute it and/or modify it
+    under the same terms as Perl itself.
+
+=cut
