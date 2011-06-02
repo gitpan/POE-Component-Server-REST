@@ -2,6 +2,7 @@ Build.PL
 Changes
 lib/POE/Component/Server/REST.pm
 lib/POE/Component/Server/REST/Response.pm
+examples/server.pl
 LICENSE
 Makefile.PL
 MANIFEST

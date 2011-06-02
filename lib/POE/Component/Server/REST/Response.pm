@@ -5,7 +5,7 @@ use warnings;
 
 # Initialize our version
 use vars qw( $VERSION );
-$VERSION = '1.01';
+$VERSION = '1.02';
 
 # Set our stuff to SimpleHTTP::Response
 use base qw( POE::Component::Server::SimpleHTTP::Response );

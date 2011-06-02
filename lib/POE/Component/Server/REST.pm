@@ -1,793 +1,732 @@
 package POE::Component::Server::REST;
 
-use strict; 
+use strict;
 use warnings;
 
 use vars qw( $VERSION );
-$VERSION = '1.01';
+$VERSION = '1.02';
 
-use Carp qw(croak);
+use Carp qw(croak confess cluck longmess);
 
 # Import the proper POE stuff
 use POE;
 use POE::Session;
 use POE::Component::Server::SimpleHTTP;
 use Data::Dumper;
+
 use XML::Simple;
+use YAML::Tiny;
 
 # Our own modules
 use POE::Component::Server::REST::Response;
 
 use constant {
-	APP_OK => 200,
-	APP_CREATED => 201,
-	APP_ACCEPTED => 202,
-	APP_NONAUTHORATIVE => 203,
-	APP_NOCONTENT => 204,
-	APP_RESETCONTENT => 205,
-	APP_PARTIALCONTENT => 206,
+	T_YAML	=> 'text/yaml',
+	T_XML	=> 'text/xml',
+	
+    APP_OK             => 200,
+    APP_CREATED        => 201,
+    APP_ACCEPTED       => 202,
+    APP_NONAUTHORATIVE => 203,
+    APP_NOCONTENT      => 204,
+    APP_RESETCONTENT   => 205,
+    APP_PARTIALCONTENT => 206,
 
-	CLIENT_BADREQUEST => 400,
-	CLIENT_UNAUTHORIZED => 401,
-	CLIENT_FORBIDDEN => 403,
-	CLIENT_NOTFOUND => 404,
-	CLIENT_TIMEOUT => 408,
+    CLIENT_BADREQUEST   => 400,
+    CLIENT_UNAUTHORIZED => 401,
+    CLIENT_FORBIDDEN    => 403,
+    CLIENT_NOTFOUND     => 404,
+    CLIENT_TIMEOUT      => 408,
 
-	SERVER_INTERNALERROR => 500,
-	SERVER_UNIMPLEMENTED => 501,
+    SERVER_INTERNALERROR => 500,
+    SERVER_UNIMPLEMENTED => 501,
 };
 
 # Set some constants
 BEGIN {
-      if ( ! defined &DEBUG ) { *DEBUG = sub () { 2 } }
+    if ( !defined &DEBUG ) {
+        *DEBUG = sub () { 2 }
+    }
+}
+
+sub debug {
+	warn("DEBUG: ".(shift)."\n");
 }
 
 sub new {
-      # Get the OOP's type
-      my $type = shift;
+    # Get the OOP's type
+    my $type = shift;
 
-      # Sanity checking
-      if ( @_ & 1 ) {
-            croak( 'POE::Component::Server::REST->new needs even number of options' );
-      }
+    # Sanity checking
+    if ( @_ & 1 ) {
+        croak('POE::Component::Server::REST->new needs even number of options');
+    }
 
-      # The options hash
-      my %opt = @_;
+    # The options hash
+    my %opt = @_;
 
-      # Our own options
-      my ( $ALIAS, $ADDRESS, $PORT, $HEADERS, $HOSTNAME, $MUSTUNDERSTAND, $SIMPLEHTTP );
+    # Our own options
+    my ( $ALIAS, $ADDRESS, $PORT, $HEADERS, $HOSTNAME, $CONTENTTYPE, $SIMPLEHTTP );
 
-      # You could say I should do this: $Stuff = delete $opt{'Stuff'}
-      # But, that kind of behavior is not defined, so I would not trust it...
+    # You could say I should do this: $Stuff = delete $opt{'Stuff'}
+    # But, that kind of behavior is not defined, so I would not trust it...
 
-      # Get the session alias
-      if ( exists $opt{'ALIAS'} and defined $opt{'ALIAS'} and length( $opt{'ALIAS'} ) ) {
-            $ALIAS = $opt{'ALIAS'};
+    # Get the session alias
+    if ( exists( $opt{'ALIAS'} ) and defined( $opt{'ALIAS'} ) and length( $opt{'ALIAS'} ) ) {
+        $ALIAS = $opt{'ALIAS'};
+        delete $opt{'ALIAS'};
+    } else {
+
+        # Debugging info...
+		debug('Using default ALIAS = RESTService') if DEBUG;
+
+        # Set the default
+        $ALIAS = 'RESTService';
+
+        # Remove any lingering ALIAS
+        if ( exists $opt{'ALIAS'} ) {
             delete $opt{'ALIAS'};
-      } else {
-            # Debugging info...
-            if ( DEBUG ) {
-                  warn 'Using default ALIAS = RESTService';
-            }
+        }
+    }
 
-            # Set the default
-            $ALIAS = 'RESTService';
+    # Get the PORT
+    if ( exists($opt{'PORT'}) and defined($opt{'PORT'}) and length( $opt{'PORT'} ) ) {
+        $PORT = $opt{'PORT'};
+        delete $opt{'PORT'};
+    } else {
 
-            # Remove any lingering ALIAS
-            if ( exists $opt{'ALIAS'} ) {
-                  delete $opt{'ALIAS'};
-            }
-      }
+        # Debugging info...
+		debug('Using default PORT = 80') if DEBUG;
 
-	# Get the PORT
-      if ( exists $opt{'PORT'} and defined $opt{'PORT'} and length( $opt{'PORT'} ) ) {
-            $PORT = $opt{'PORT'};
+        # Set the default
+        $PORT = 80;
+
+        # Remove any lingering PORT
+        if ( exists $opt{'PORT'} ) {
             delete $opt{'PORT'};
-      } else {
-            # Debugging info...
-            if ( DEBUG ) {
-                  warn 'Using default PORT = 80';
-            }
+        }
+    }
 
-            # Set the default
-            $PORT = 80;
+    # Get the ADDRESS
+    if ( exists($opt{'ADDRESS'}) and defined($opt{'ADDRESS'}) and length($opt{'ADDRESS'}) ) {
+        $ADDRESS = $opt{'ADDRESS'};
+        delete $opt{'ADDRESS'};
+    } else {
+        croak('ADDRESS is required to create a new POE::Component::Server::REST instance!');
+    }
 
-            # Remove any lingering PORT
-            if ( exists $opt{'PORT'} ) {
-                  delete $opt{'PORT'};
-            }
-      }
+    # Get the HEADERS
+    if ( exists($opt{'HEADERS'}) and defined($opt{'HEADERS'}) ) {
 
-      # Get the ADDRESS
-      if ( exists $opt{'ADDRESS'} and defined $opt{'ADDRESS'} and length( $opt{'ADDRESS'} ) ) {
-            $ADDRESS = $opt{'ADDRESS'};
-            delete $opt{'ADDRESS'};
-      } else {
-            croak( 'ADDRESS is required to create a new POE::Component::Server::REST instance!' );
-      }
+        # Make sure it is ref to hash
+        if ( ref $opt{'HEADERS'} and ref( $opt{'HEADERS'} ) eq 'HASH' ) {
+            $HEADERS = $opt{'HEADERS'};
+            delete $opt{'HEADERS'};
+        } else {
+            croak('HEADERS must be a reference to a HASH!');
+        }
+    } else {
 
-      # Get the HEADERS
-      if ( exists $opt{'HEADERS'} and defined $opt{'HEADERS'} ) {
-            # Make sure it is ref to hash
-            if ( ref $opt{'HEADERS'} and ref( $opt{'HEADERS'} ) eq 'HASH' ) {
-                  $HEADERS = $opt{'HEADERS'};
-                  delete $opt{'HEADERS'};
-            } else {
-                  croak( 'HEADERS must be a reference to a HASH!' );
-            }
-      } else {
-            # Debugging info...
-            if ( DEBUG ) {
-                  warn 'Using default HEADERS ( SERVER => POE::Component::Server::REST/' . $VERSION . ' )';
-            }
+        # Debugging info...
+		debug('Using default HEADERS ( SERVER => POE::Component::Server::REST/' . $VERSION . ' )') if DEBUG;
 
-            # Set the default
-            $HEADERS = {
-                  'Server'    =>    'POE::Component::Server::REST/' . $VERSION,
-            };
+        # Set the default
+        $HEADERS = { 'Server' => 'POE::Component::Server::REST/' . $VERSION, };
 
-            # Remove any lingering HEADERS
-            if ( exists $opt{'HEADERS'} ) {
-                  delete $opt{'HEADERS'};
-            }
-      }
+        # Remove any lingering HEADERS
+        if ( exists $opt{'HEADERS'} ) {
+            delete $opt{'HEADERS'};
+        }
+    }
 
-	# Get the HOSTNAME
-      if ( exists $opt{'HOSTNAME'} and defined $opt{'HOSTNAME'} and length( $opt{'HOSTNAME'} ) ) {
-            $HOSTNAME = $opt{'HOSTNAME'};
+    # Get the HOSTNAME
+    if ( exists($opt{'HOSTNAME'}) and defined($opt{'HOSTNAME'}) and length($opt{'HOSTNAME'}) ) {
+        $HOSTNAME = $opt{'HOSTNAME'};
+        delete $opt{'HOSTNAME'};
+    } else {
+
+        # Debugging info...
+		debug('Letting POE::Component::Server::SimpleHTTP create a default HOSTNAME') if DEBUG;
+
+        # Set the default
+        $HOSTNAME = undef;
+
+        # Remove any lingering HOSTNAME
+        if ( exists $opt{'HOSTNAME'} ) {
             delete $opt{'HOSTNAME'};
-      } else {
-            # Debugging info...
-            if ( DEBUG ) {
-                  warn 'Letting POE::Component::Server::SimpleHTTP create a default HOSTNAME';
-            }
+        }
+    }
 
-            # Set the default
-            $HOSTNAME = undef;
+    # Get the CONTENTTYPE
+    if ( exists($opt{'CONTENTTYPE'}) and defined($opt{'CONTENTTYPE'}) and length($opt{'CONTENTTYPE'}) ) {
+        $CONTENTTYPE = $opt{'CONTENTTYPE'};
+        delete $opt{'CONTENTTYPE'};
+		croak("CONTENTTYPE needs to be of ".T_YAML." or ".T_XML) unless ( grep($CONTENTTYPE, (T_YAML, T_XML)) );
+    } else {
 
-            # Remove any lingering HOSTNAME
-            if ( exists $opt{'HOSTNAME'} ) {
-                  delete $opt{'HOSTNAME'};
-            }
-      }
+        # Set the default
+        $CONTENTTYPE = T_YAML;
+		debug("Using default CONTENTTYPE ( $CONTENTTYPE )") if DEBUG;
 
-      # Get the MUSTUNDERSTAND
-      if ( exists $opt{'MUSTUNDERSTAND'} and defined $opt{'MUSTUNDERSTAND'} and length( $opt{'MUSTUNDERSTAND'} ) ) {
-            $MUSTUNDERSTAND = $opt{'MUSTUNDERSTAND'};
-            delete $opt{'MUSTUNDERSTAND'};
-      } else {
-            # Debugging info...
-            if ( DEBUG ) {
-                  warn 'Using default MUSTUNDERSTAND ( 1 )';
-            }
+        # Remove any lingering CONTENTTYPE
+        if ( exists $opt{'CONTENTTYPE'} ) {
+            delete $opt{'CONTENTTYPE'};
+        }
+    }
 
-            # Set the default
-            $MUSTUNDERSTAND = 1;
+    # Get the SIMPLEHTTP
+    if ( exists($opt{'SIMPLEHTTP'}) and defined($opt{'SIMPLEHTTP'}) and (ref($opt{'SIMPLEHTTP'}) eq 'HASH') ) {
+        $SIMPLEHTTP = $opt{'SIMPLEHTTP'};
+        delete $opt{'SIMPLEHTTP'};
+    }
 
-            # Remove any lingering MUSTUNDERSTAND
-            if ( exists $opt{'MUSTUNDERSTAND'} ) {
-                  delete $opt{'MUSTUNDERSTAND'};
-            }
-      }
+    # Anything left over is unrecognized
+    if (DEBUG) {
+        if ( keys %opt > 0 ) {
+            croak( 'Unrecognized options were present in POE::Component::Server::REST->new -> ' . join( ', ', keys %opt ) );
+        }
+    }
 
-      # Get the SIMPLEHTTP
-      if ( exists $opt{'SIMPLEHTTP'} and defined $opt{'SIMPLEHTTP'} and ref( $opt{'SIMPLEHTTP'} ) eq 'HASH' ) {
-            $SIMPLEHTTP = $opt{'SIMPLEHTTP'};
-            delete $opt{'SIMPLEHTTP'};
-      }
+    # Create the POE Session!
+    POE::Session->create(
+        'inline_states' => {
 
-      # Anything left over is unrecognized
-      if ( DEBUG ) {
-            if ( keys %opt > 0 ) {
-                  croak( 'Unrecognized options were present in POE::Component::Server::REST->new -> ' . join( ', ', keys %opt ) );
-            }
-      }
+            # Generic stuff
+            '_start' => \&StartServer,
+            '_stop'  => sub { },
+            '_child' => \&SmartShutdown,
 
-      # Create the POE Session!
-      POE::Session->create(
-            'inline_states'   =>    {
-                  # Generic stuff
-                  '_start'    	=>    \&StartServer,
-                  '_stop'           =>    sub {},
-                  '_child'    	=>    \&SmartShutdown,
+            # Shuts down the server
+            'SHUTDOWN'    => \&StopServer,
+            'STOPLISTEN'  => \&StopListen,
+            'STARTLISTEN' => \&StartListen,
 
-                  # Shuts down the server
-                  'SHUTDOWN'  	=>    \&StopServer,
-                  'STOPLISTEN'      =>    \&StopListen,
-                  'STARTLISTEN'     =>    \&StartListen,
+            # Adds/deletes Methods
+            'ADDMETHOD'      => \&AddMethod,
+            'DELMETHOD'      => \&DeleteMethod,
+            'DELSERVICE'     => \&DeleteService,
+            'ADDCONTENTTYPE' => \&AddContentType,
+            'DELCONTENTTYPE' => \&DelContentType,
 
-                  # Adds/deletes Methods
-                  'ADDMETHOD' 	=>    \&AddMethod,
-                  'DELMETHOD' 	=>    \&DeleteMethod,
-                  'DELSERVICE'      =>    \&DeleteService,
+            # Transaction handlers
+            'Got_Request' => \&TransactionStart,
+            'FAULT'       => \&TransactionFault,
+            'RAWFAULT'    => \&TransactionFault,
+            'DONE'        => \&TransactionDone,
+            'RAWDONE'     => \&TransactionDone,
+            'CLOSE'       => \&TransactionClose,
+        },
 
-                  # Transaction handlers
-                  'Got_Request'     =>    \&TransactionStart,
-                  'FAULT'           =>    \&TransactionFault,
-                  'RAWFAULT'  	=>    \&TransactionFault,
-                  'DONE'            =>    \&TransactionDone,
-                  'RAWDONE'   	=>    \&TransactionDone,
-                  'CLOSE'           =>    \&TransactionClose,
-            },
+        # Our own heap
+        'heap' => {
+            'INTERFACES'     => {},
+            'CONTENT'        => {},
+            'ALIAS'          => $ALIAS,
+            'ADDRESS'        => $ADDRESS,
+            'PORT'           => $PORT,
+            'HEADERS'        => $HEADERS,
+            'HOSTNAME'       => $HOSTNAME,
+            'CONTENTTYPE' 	 => $CONTENTTYPE,
+            'SIMPLEHTTP'     => $SIMPLEHTTP,
+        },
+    ) or die 'Unable to create a new session!';
 
-            # Our own heap
-            'heap'            =>    {
-                  'INTERFACES'      =>    {},
-                  'ALIAS'           =>    $ALIAS,
-                  'ADDRESS'         =>    $ADDRESS,
-                  'PORT'            =>    $PORT,
-                  'HEADERS'         =>    $HEADERS,
-                  'HOSTNAME'        =>    $HOSTNAME,
-                  'MUSTUNDERSTAND'  =>    $MUSTUNDERSTAND,
-                  'SIMPLEHTTP'      =>    $SIMPLEHTTP,
-            },
-      ) or die 'Unable to create a new session!';
+    # Return success
+    return 1;
+}
 
-      # Return success
-      return 1;
+sub unmarshall {
+    my ($body, $format) = @_;
+
+	my $struct;
+    if ( defined($body) and defined($format) ) {
+
+		if( $format eq T_XML) {
+	        $struct = eval { XMLin($body, KeepRoot => 1 ) };
+    	    return if($@);
+		}
+
+		if( $format eq T_YAML ) {
+			$struct = Load($body);
+		}
+    }
+	return $struct;
+}
+
+sub marshall {
+	my ($struct, $format) = @_;
+
+	my $string;	
+	if ( defined($struct) and defined($format) ) {
+
+		if( $format eq T_XML) {
+			$string = eval { XMLout( $struct, KeepRoot => 1, XMLDecl => 1, NoAttr => 1 ) };
+			return if($@);
+		}
+		
+		if( $format eq T_YAML ) {
+			$string = Dump($struct);
+		}
+	}
+	return $string;
+}
+
+sub build_response {
+	my ( $short, $detail, $content ) = @_;
+	return {
+		result => {
+			short => $short,
+			detail => $detail,
+			content => $content,
+		},
+	};		
 }
 
 # Creates the server
 sub StartServer {
-      # Set the alias
-      $_[KERNEL]->alias_set( $_[HEAP]->{'ALIAS'} );
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
 
-      # Create the webserver!
-      POE::Component::Server::SimpleHTTP->new(
-            'ALIAS'         =>      $_[HEAP]->{'ALIAS'} . '-BACKEND',
-            'ADDRESS'       =>      $_[HEAP]->{'ADDRESS'},
-            'PORT'          =>      $_[HEAP]->{'PORT'},
-            'HOSTNAME'      =>      $_[HEAP]->{'HOSTNAME'},
-            'HEADERS'   =>    $_[HEAP]->{'HEADERS'},
-            'HANDLERS'      =>      [
-                  {
-                        'DIR'           =>      '.*',
-                        'SESSION'       =>      $_[HEAP]->{'ALIAS'},
-                        'EVENT'         =>      'Got_Request',
-                  },
-            ],
-            ( defined $_[HEAP]->{'SIMPLEHTTP'} ? ( %{ $_[HEAP]->{'SIMPLEHTTP'} } ) : () ),
-      ) or die 'Unable to create the HTTP Server';
+    # Set the alias
+    $kernel->alias_set( $heap->{'ALIAS'} );
 
-      # Success!
-      return;
+    # Create the webserver!
+    POE::Component::Server::SimpleHTTP->new(
+        'ALIAS'    => $heap->{'ALIAS'} . '-BACKEND',
+        'ADDRESS'  => $heap->{'ADDRESS'},
+        'PORT'     => $heap->{'PORT'},
+        'HOSTNAME' => $heap->{'HOSTNAME'},
+        'HEADERS'  => $heap->{'HEADERS'},
+        'HANDLERS' => [
+            {
+                'DIR'     => '.*',
+                'SESSION' => $heap->{'ALIAS'},
+                'EVENT'   => 'Got_Request',
+            },
+        ],
+        (
+            defined($heap->{'SIMPLEHTTP'}) ? ( %{ $heap->{'SIMPLEHTTP'} } ): ()
+        ),
+    ) or die 'Unable to create the HTTP Server';
+
+    # Success!
+    return;
 }
 
 # Shuts down the server
 sub StopServer {
-      # Tell the webserver to die!
-      if ( defined $_[ARG0] and $_[ARG0] eq 'GRACEFUL' ) {
-            # Shutdown gently...
-            $_[KERNEL]->call( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'SHUTDOWN', 'GRACEFUL' );
-      } else {
-            # Shutdown NOW!
-            $_[KERNEL]->call( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'SHUTDOWN' );
-      }
+	my ($kernel, $heap, $how) = @_[KERNEL, HEAP, ARG0];
 
-      # Success!
-      return;
+    # Tell the webserver to die!
+    if ( defined($how) and ($how eq 'GRACEFUL') ) {
+        # Shutdown gently...
+        $kernel->call( $heap->{'ALIAS'} . '-BACKEND', 'SHUTDOWN', 'GRACEFUL' );
+    } else {
+        # Shutdown NOW!
+        $kernel->call( $heap->{'ALIAS'} . '-BACKEND', 'SHUTDOWN' );
+    }
+
+    # Success!
+    return;
 }
 
 # Stops listening for connections
 sub StopListen {
-      # Tell the webserver this!
-      $_[KERNEL]->call( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'STOPLISTEN' );
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
 
-      # Success!
-      return;
+    # Tell the webserver this!
+    $kernel->call( $heap->{'ALIAS'} . '-BACKEND', 'STOPLISTEN' );
+
+    # Success!
+    return;
 }
 
 # Starts listening for connections
 sub StartListen {
-      # Tell the webserver this!
-      $_[KERNEL]->call( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'STARTLISTEN' );
+	my ($kernel, $heap) = @_[KERNEL, HEAP];
 
-      # Success!
-      return;
+    # Tell the webserver this!
+    $kernel->call( $heap->{'ALIAS'} . '-BACKEND', 'STARTLISTEN' );
+
+    # Success!
+    return;
 }
 
 # Watches for SimpleHTTP shutting down and shuts down ourself
 sub SmartShutdown {
-      # ARG0 = type, ARG1 = ref to session, ARG2 = parameters
+	my ($kernel, $heap, $type, $ref, $params) = @_[KERNEL, HEAP, ARG0, ARG1, ARG2];
 
-      # Check for real shutdown
-      if ( $_[ARG0] eq 'lose' ) {
-            # Remove our alias
-            $_[KERNEL]->alias_remove( $_[HEAP]->{'ALIAS'} );
+    # Check for real shutdown
+    if ( $type eq 'lose' ) {
 
-            # Debug stuff
-            if ( DEBUG ) {
-                  warn 'Received _child event from SimpleHTTP, shutting down';
-            }
-      }
+        # Remove our alias
+        $kernel->alias_remove( $heap->{'ALIAS'} );
 
-      # All done!
-      return;
+        # Debug stuff
+		debug('Received _child event from SimpleHTTP, shutting down') if DEBUG;
+    }
+
+    # All done!
+    return;
 }
 
 # Adds a method
 sub AddMethod {
-      # ARG0: Session alias, ARG1: Session event, ARG2: Service name, ARG3: Method name
-      my( $alias, $event, $service, $method );
+    # ARG0: Session alias, ARG1: Session event, ARG2: Service name, ARG3: Method name
+    my ( $kernel, $heap, $alias, $event, $service, $method ) = @_[KERNEL, HEAP, ARG0, ARG1, ARG2, ARG3];
 
-      # Check for stuff!
-      if ( defined $_[ARG0] and length( $_[ARG0] ) ) {
-            $alias = $_[ARG0];
-      } else {
-            # Complain!
-            if ( DEBUG ) {
-                  warn 'Did not get a Session Alias';
+    # Validate parameters
+    unless ( defined($alias) and length($alias) ) {
+		debug('Did not get a Session Alias') if DEBUG;
+        return;
+    }
+
+    unless ( defined($event) and length($event) ) {
+		debug('Did not get a Session Event') if DEBUG;
+        return;
+    }
+
+    unless ( defined($service) and length($service) ) {
+		debug('Using Session Alias as Service Name') if DEBUG;
+        $service = $alias;
+    }
+
+    unless ( defined($method) and length($method) ) {
+		debug('Using Session Event as Method Name') if DEBUG;
+        $method = $event;
+    }
+
+    # If we are debugging, check if we overwrote another method
+    if (DEBUG) {
+        if ( exists $heap->{'INTERFACES'}->{$service} ) {
+            if ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
+                debug('Overwriting old method entry in the registry ( ' . $service . ' -> ' . $method . ' )');
             }
-            return;
-      }
+        }
+    }
 
-      if ( defined $_[ARG1] and length( $_[ARG1] ) ) {
-            $event = $_[ARG1];
-      } else {
-            # Complain!
-            if ( DEBUG ) {
-                  warn 'Did not get a Session Event';
-            }
-            return;
-      }
+    # Add it to our INTERFACES
+    $heap->{'INTERFACES'}->{$service}->{$method} = [ $alias, $event ];
+	debug("Added method $method to service $service") if DEBUG;
 
-      # If none, defaults to the Session stuff
-      if ( defined $_[ARG2] and length( $_[ARG2] ) ) {
-            $service = $_[ARG2];
-      } else {
-            # Debugging stuff
-            if ( DEBUG ) {
-                  warn 'Using Session Alias as Service Name';
-            }
-
-            $service = $alias;
-      }
-
-      if ( defined $_[ARG3] and length( $_[ARG3] ) ) {
-            $method = $_[ARG3];
-      } else {
-            # Debugging stuff
-            if ( DEBUG ) {
-                  warn 'Using Session Event as Method Name';
-            }
-
-            $method = $event;
-      }
-
-      # If we are debugging, check if we overwrote another method
-      if ( DEBUG ) {
-            if ( exists $_[HEAP]->{'INTERFACES'}->{ $service } ) {
-                  if ( exists $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method } ) {
-                        warn 'Overwriting old method entry in the registry ( ' . $service . ' -> ' . $method . ' )';
-                  }
-            }
-      }
-
-      # Add it to our INTERFACES
-      $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method } = [ $alias, $event ];
-
-      # Return success
-      return 1;
+    # Return success
+    return 1;
 }
 
 # Deletes a method
 sub DeleteMethod {
-      # ARG0: Service name, ARG1: Service method name
-      my( $service, $method ) = @_[ ARG0, ARG1 ];
+    # ARG0: Service name, ARG1: Service method name
+    my ( $kernel, $heap, $service, $method ) = @_[ KERNEL, HEAP, ARG0, ARG1 ];
 
-      # Validation
-      if ( defined $service and length( $service ) ) {
+    # Validation
+    if ( defined($service) and length($service) ) {
+
+        # Validation
+        if ( defined($method) and length($method) ) {
+
             # Validation
-            if ( defined $method and length( $method ) ) {
-                  # Validation
-                  if ( exists $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method } ) {
-                        # Delete it!
-                        delete $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method };
+            if ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
 
-                        # Check to see if the service now have no methods
-                        if ( keys( %{ $_[HEAP]->{'INTERFACES'}->{ $service } } ) == 0 ) {
-                              # Debug stuff
-                              if ( DEBUG ) {
-                                    warn "Service $service contains no methods, removing it!";
-                              }
+                # Delete it!
+                delete $heap->{'INTERFACES'}->{$service}->{$method};
+				debug("Removed method $method for service $service.") if DEBUG;
 
-                              # Delete it!
-                              delete $_[HEAP]->{'INTERFACES'}->{ $service };
-                        }
+                # Check to see if the service now have no methods
+                if ( keys( %{ $heap->{'INTERFACES'}->{$service} } ) == 0 ) {
 
-                        # Return success
-                        return 1;
-                  } else {
-                        # Error!
-                        if ( DEBUG ) {
-                              warn 'Tried to delete a nonexistant Method in Service -> ' . $service . ' : ' . $method;
-                        }
-                  }
+                    # Debug stuff
+					debug("Service $service contains no methods, removing it!") if DEBUG;
+
+                    # Delete it!
+                    delete $heap->{'INTERFACES'}->{$service};
+                }
+
+                # Return success
+                return 1;
             } else {
-                  # Complain!
-                  if ( DEBUG ) {
-                        warn 'Did not get a method to delete in Service -> ' . $service;
-                  }
+				debug("Tried to delete a nonexistant Method in Service -> $service: $method") if DEBUG;
             }
-      } else {
-            # No arguments!
-            if ( DEBUG ) {
-                  warn 'Received no arguments!';
-            }
-      }
+        } else {
+			debug("Did not get a method to delete in Service -> $service") if DEBUG;
+        }
+    } else {
+		debug('Received no arguments!') if DEBUG;
+    }
 
-      return;
+    return;
 }
 
 # Deletes a service
 sub DeleteService {
-      # ARG0: Service name
-      my( $service ) = $_[ ARG0 ];
+    # ARG0: Service name
+    my ( $kernel, $heap, $service) = @_[ KERNEL, HEAP, ARG0 ];
 
-      # Validation
-      if ( defined $service and length( $service ) ) {
-            # Validation
-            if ( exists $_[HEAP]->{'INTERFACES'}->{ $service } ) {
-                  # Delete it!
-                  delete $_[HEAP]->{'INTERFACES'}->{ $service };
+    # Validation
+    if ( defined($service) and length($service) ) {
 
-                  # Return success!
-                  return 1;
-            } else {
-                  # Error!
-                  if ( DEBUG ) {
-                        warn 'Tried to delete a Service that does not exist! -> ' . $service;
-                  }
-            }
-      } else {
-            # No arguments!
-            if ( DEBUG ) {
-                  warn 'Received no arguments!';
-            }
-      }
+        # Validation
+        if ( exists $heap->{'INTERFACES'}->{$service} ) {
 
-      return;
+            # Delete it!
+            delete $heap->{'INTERFACES'}->{$service};
+			debug("Deleted Service $service") if DEBUG;
+
+            # Return success!
+            return 1;
+        } else {
+            # Error!
+			debug("Tried to delete a Service that does not exist! -> $service") if DEBUG;
+        }
+    } else {
+        # No arguments!
+		debug('Received no arguments!') if DEBUG;
+    }
+
+    return;
 }
 
 # Got a request, handle it!
 sub TransactionStart {
-      # ARG0 = HTTP::Request, ARG1 = HTTP::Response, ARG2 = dir that matched
-      my ( $request, $response ) = @_[ ARG0, ARG1 ];
 
-      # Check for error in parsing of request
-      if ( ! defined $request ) {
-            # Create a new error and send it off!
-            $_[KERNEL]->yield( 'FAULT',
-                  $response,
-                  CLIENT_BADREQUEST,
-                  'Bad Request',
-                  'Unable to parse HTTP query',
-            );
+    # ARG0 = HTTP::Request, ARG1 = HTTP::Response, ARG2 = dir that matched
+    my ( $kernel, $heap, $request, $response, $dir ) = @_[ KERNEL, HEAP, ARG0, ARG1, ARG2 ];
+
+	debug("<<<<<< NEW REQUEST >>>>>>>") if DEBUG;
+
+    # Check for error in parsing of request
+    unless ( defined $request ) {
+        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Unable to parse HTTP query', );
+        return;
+    }
+
+    # We need the method name
+    my $type = $request->method();
+    debug("Request is of method: " . uc($type) ) if DEBUG;
+
+	# Validate REQUEST Method ie. POST, PUT, DELETE, GET
+    unless ( defined($type) and length($type) ) {
+        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Invalid Request Method', );
+        return;
+    }
+
+    # Validate the service
+    my $service;
+    my $query_string = $request->uri->query();
+    unless ( defined($query_string) and ($query_string =~ /\bsession=(.+$)/x) ) {
+
+        # Set service when there is only one service known.
+        my @services = keys %{ $heap->{'INTERFACES'} };
+        if ( scalar(@services) == 1 ) {
+            $service = $services[0];
+            debug("Only one service known, guess its this one $service") if DEBUG;
+        } else {
+            debug("Too many services to guess the right one: " . join( ",", @services ) ) if DEBUG;
+            $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Unable to parse the URI for the service', );
             return;
-      }
+        }
+    } else {
+        # Set the service
+        $service = $1;
+    }
 
-      # We only handle text/xml content
-	warn("DEBUG: received header: ". $request->header('Content-Type')) if DEBUG;
-      if ( ! $request->header('Content-Type') || $request->header('Content-Type') !~ /^text\/xml(;.*)?$/ ) {
-            # Create a new error and send it off!
-            $_[KERNEL]->yield( 'FAULT',
-                  $response,
-                  CLIENT_BADREQUEST,
-                  'Bad Request',
-                  'Content-Type must be text/xml',
-            );
-            return;
-      }
+    # Check to see if this service exists
+    unless ( exists($heap->{'INTERFACES'}->{$service}) ) {
+        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', "Unknown service: $service", );
+        return;
+    } else {
+        debug("Found service $service to be valid.");
+    }
 
-      # We need the method name
-	my $type = $request->method();
-	warn("DEBUG: Request is of method: ".uc($type)) if DEBUG;
-      if ( ! defined $type or ! length( $type ) ) {
-            # Create a new error and send it off!
-            $_[KERNEL]->yield( 'FAULT',
-                  $response,
-                  CLIENT_BADREQUEST,
-                  'Bad Request',
-                  'Invalid Request Method',
-            );
-            return;
-      }
+	# Validate given ContentType
+    debug("Received header: " . $request->header('Content-Type') ) if DEBUG;
+    my ( $contenttype, undef ) = split( m/;/, $request->header('Content-Type') || '', 2 );
+    unless ( $request->header('Content-Type') and $contenttype eq $heap->{'CONTENTTYPE'} ) {
+        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Content-Type must be of: '.$heap->{CONTENTTYPE} );
+        return;
+    }
 
-      # Get some stuff
-	my $service;
-      my $query_string = $request->uri->query();
-      if ( ! defined $query_string or $query_string !~ /\bsession=(.+ $ )/x ) {
+    # Get the method name
+    my $uri = $request->uri;
+    debug(" requested uri: $uri");
+    unless ( $uri =~ /(\/\D+)(\/\w+)?(\/)?(\?session=(.+))?$/ ) {
+        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', "Unrecognized REST url structure: $uri", );
+        return;
+    } 
 
-		# Set service when there is only one service known.
-		my @services = keys %{ $_[HEAP]->{'INTERFACES'}  };
-		if( scalar(@services) == 1 ) {
-			$service = $services[0];
-			warn("DEBUG: Only one service known, guess its that one.") if DEBUG;
-		} else {
-			# Create a new error and send it off!
-			warn("DEBUG: too many services to guess the right one: ". join(",", @services)) if DEBUG;
-			$_[KERNEL]->yield( 'FAULT',
-				$response,
-				CLIENT_BADREQUEST,
-				'Bad Request',
-				'Unable to parse the URI for the service',
-			);
-			return;
-		}
-      } else {
-		# Set the service
-		$service = $1;
-	}
+    # Get the uri + method
+    my $method  = $1 || '';
+    my $restkey = $2 || '';
 
-      # Check to see if this service exists
-      if ( ! exists $_[HEAP]->{'INTERFACES'}->{ $service } ) {
-            # Create a new error and send it off!
-            $_[KERNEL]->yield( 'FAULT',
-                  $response,
-                  CLIENT_BADREQUEST,
-                  'Bad Request',
-                  "Unknown service: $service",
-            );
-            return;
-      } else {
-		warn("DEBUG: Found service $service to be valid.");	
-	}
+    # Remove trailing slash
+    $method  =~ s/\/$//;
+    $restkey =~ s/^\///;
 
-      # Get the method name
-	my $uri = $request->uri;
-	warn("DEBUG: requested uri: $uri");
-	if ( $uri !~ /(\/\D+)(\/\w+)?(\/)?(\?session=(.+))?$/ ) {
-            # Create a new error and send it off!
-            $_[KERNEL]->yield( 'FAULT',
-                  $response,
-                  CLIENT_BADREQUEST,
-                  'Bad Request',
-                  "Unrecognized REST url structure: $uri",
-            );
-            return;
-      }
+    # Add prefx with given HTTP request method eg. PUT/foo/baz/bar
+    $method = "$type$method";
+    debug(" extracted method: $method") if DEBUG;
+    debug(" extracted key: $restkey")   if DEBUG;
 
-	# Get the uri + method
-      my $method = $1 || '';
-      my $restkey = $2 || '';
+    # Check to see if this method exists
+    unless ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
+        debug(" $method does not exists") if DEBUG;
+        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request',
+            "Unknown method: $method (Available: " . join( ",", keys %{ $heap->{'INTERFACES'}->{$service} } ) . ")",
+        );
+        return;
+    }
 
-	# Remove trailing slash
-	$method =~ s/\/$//;
-	$restkey =~ s/^\///;
+    # Check for errors
+    if ($@) {
+        $kernel->yield( 'FAULT', $response, SERVER_INTERNALERROR, 'Application Faulted', "Some errors occured while processing the request: $@", );
+        return;
+    }
 
-	# Add prefx with given HTTP request method eg. PUT/foo/baz/bar
-	$method = "$type$method";
+    # Check the headers for the mustUnderstand attribute, and Fault if it is present
+    my $head_count = 1;
+    my @headers    = ();
 
-      # Check to see if this method exists
-      if ( ! exists $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method } ) {
-            # Create a new error and send it off!
-            $_[KERNEL]->yield( 'FAULT',
-                  $response,
-                  CLIENT_BADREQUEST,
-                  'Bad Request',
-                  "Unknown method: $method (Available: ".join(",", keys %{ $_[HEAP]->{'INTERFACES'}->{ $service } }).")",
-            );
-            return;
-      }
+    # Extract the body
+    my $body = unmarshall($request->content, $heap->{CONTENTTYPE});
 
-      # Check for errors
-      if ( $@ ) {
-		# Create a new error and send it off!
-		$_[KERNEL]->yield( 'FAULT',
-			$response,
-			SERVER_INTERNALERROR,
-			'Application Faulted',
-			"Some errors occured while processing the request: $@",
-		);
+    # If it is an empty string, turn it into undef
+    if ( defined($body) and !ref($body) and $body eq '' ) {
+        $body = undef;
+    }
 
-            # All done!
-            return;
-      }
+    # Hax0r the Response to include our stuff!
+    $response->{'RESTMETHOD'}  = $method;
+    $response->{'RESTBODY'}    = $body;
+    $response->{'RESTSERVICE'} = $service;
+    $response->{'RESTREQUEST'} = $request;
+    $response->{'RESTURI'}     = $method;
 
-	# Check the headers for the mustUnderstand attribute, and Fault if it is present
-      my $head_count = 1;
-      my @headers = ();
+    # Make the headers undef if there is none
+    if ( scalar(@headers) ) {
+        $response->{'RESTHEADERS'} = \@headers;
+    } else {
+        $response->{'RESTHEADERS'} = undef;
+    }
 
-      # Extract the body
-      my $body = $request->content;
+    # ReBless it ;)
+    bless( $response, 'POE::Component::Server::REST::Response' );
 
-      # If it is an empty string, turn it into undef
-      if ( defined $body and ! ref( $body ) and $body eq '' ) {
-            $body = undef;
-      }
+    # Send it off to the handler!
+    $kernel->post( $heap->{'INTERFACES'}->{$service}->{$method}->[0], $heap->{'INTERFACES'}->{$service}->{$method}->[1], $response, $restkey, );
 
-	# Parse it
-	if ( defined($body) ) {
-		my $struct = eval { XMLin($body, KeepRoot => 1 ) };
-		if($@) {
-			$_[KERNEL]->yield( 'FAULT',
-				$response,
-				CLIENT_BADREQUEST,
-				'Bad Request',
-				"Error parsing XML structure.",
-			);
-			return;
-		}	
-		$response->content( $struct );
-	} 
+    # Debugging stuff
+	debug("Sending off to the handler: Service $service -> Method $method for " . $response->connection->remote_ip()) if DEBUG;
+	debug("Received content: ".$request->content()."\n") if DEBUG;
 
-      # Hax0r the Response to include our stuff!
-      $response->{'RESTMETHOD'} = $method;
-      $response->{'RESTBODY'} = $body;
-      $response->{'RESTSERVICE'} = $service;
-      $response->{'RESTREQUEST'} = $request;
-      $response->{'RESTURI'} = $method;
-
-      # Make the headers undef if there is none
-      if ( scalar( @headers ) ) {
-            $response->{'RESTHEADERS'} = \@headers;
-      } else {
-            $response->{'RESTHEADERS'} = undef;
-      }
-
-      # ReBless it ;)
-      bless( $response, 'POE::Component::Server::REST::Response' );
-
-      # Send it off to the handler!
-      $_[KERNEL]->post( $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method }->[0],
-            $_[HEAP]->{'INTERFACES'}->{ $service }->{ $method }->[1],
-            $response,
-		$restkey,
-      );
-
-      # Debugging stuff
-      if ( DEBUG ) {
-            warn "Sending off to the handler: Service $service -> Method $method for " . $response->connection->remote_ip();
-      }
-
-      if ( DEBUG == 2 ) {
-            print STDERR $request->content(), "\n\n";
-      }
-
-      # All done!
-      return;
+    # All done!
+    return;
 }
-
 
 # Creates the fault and sends it off
 sub TransactionFault {
-      # ARG0 = SOAP::Response, ARG1 = SOAP faultcode, ARG2 = SOAP faultstring, ARG3 = SOAP Fault Detail, ARG4 = SOAP Fault Actor
-      my ( $response, $fault_code, $fault_string, $fault_detail, $fault_actor ) = @_[ ARG0 .. ARG4 ];
+    # ARG0 = SOAP::Response, ARG1 = SOAP faultcode, ARG2 = SOAP faultstring, ARG3 = SOAP Fault Detail, ARG4 = SOAP Fault Actor
+    my ( $kernel, $heap, $response, $fault_code, $fault_string, $fault_detail, $fault_actor ) = @_[ KERNEL, HEAP, ARG0, ARG1, ARG2, ARG3, ARG4 ];
 
-      # Make sure we have a REST::Response object here :)
-      if ( ! defined $response ) {
-            # Debug stuff
-            if ( DEBUG ) {
-                  warn 'Received FAULT event but no arguments!';
-            }
-		$response = POE::Component::Server::REST::Response->new();
-            #return;
-      }
+	debug("<<<<<< BUILDING FAULT >>>>>>>") if DEBUG;
 
-      # Is this a RAWFAULT event?
-      my $content = undef;
-      if ( $_[STATE] eq 'RAWFAULT' ) {
-            $content = $response->content();
-      } else {
-            # Fault Code must be defined
-            if ( ! defined $fault_code or ! length( $fault_code ) ) {
-                  # Debug stuff
-                  if ( DEBUG ) {
-                        warn 'Setting default Fault Code';
-                  }
+    # Make sure we have a REST::Response object here :)
+    unless ( defined $response ) {
+        debug('Received FAULT event but no arguments!') if DEBUG;
+        $response = POE::Component::Server::REST::Response->new();
+    }
 
-                  # Set the default
-                  $fault_code = SERVER_INTERNALERROR;
-            }
+	# Set default for short and detail
+	$fault_string = "Fault" unless $fault_string;
+	$fault_detail = "Application faulted" unless $fault_detail;
 
-            # FaultString is a short description of the error
-            if ( ! defined $fault_string or ! length( $fault_string ) ) {
-                  # Debug stuff
-                  if ( DEBUG ) {
-                        warn 'Setting default Fault String';
-                  }
+	# Set default code
+    $response->code( $fault_code );
+	$response->code(SERVER_INTERNALERROR) unless $fault_code;
 
-                  # Set the default
-                  $fault_string = 'Application Faulted';
-            }
+	# Build answer
+	$response->content(undef) unless $response->content;
+	$response->content( build_response($fault_string, $fault_detail, $response->content) );
 
-            $content = XMLout({
-			result => {
-				short => [ $fault_string ],
-				detail => [ $fault_detail ],
-			},
-		}, KeepRoot => 1, XMLDecl => 1 );
-      }
-	
-	$response->code( $fault_code );
-      $response->content( $content );
+	# Set Content-Type header
+	$response->header( 'Content-Type', $heap->{CONTENTTYPE} );
 
-      # Setup the response
-      if ( ! defined $response->code ) {
-            $response->code( SERVER_INTERNALERROR );
-      }
+    debug("Fault code: " . $response->code ) if DEBUG;
+    debug("Fault header: \n" . $response->headers->as_string ) if DEBUG;
+    debug("Fault content: " . Dumper($response->content) ) if DEBUG;
 
-      $response->header( 'Content-Type', 'text/xml' );
+	# Marhsall the answer
+	$response->content( marshall($response->content, $response->header('Content-Type')) );
 
-      # Send it off to the backend!
-      $_[KERNEL]->post( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'DONE', $response );
+    # Send it off to the backend!
+    $kernel->post( $heap->{'ALIAS'} . '-BACKEND', 'DONE', $response );
 
-      # Debugging stuff
-      if ( DEBUG ) {
-            warn 'Finished processing ' . $_[STATE] . ' for ' . $response->connection->remote_ip();
-      }
+	debug('Finished processing ' . $_[STATE] . ' for ' . $response->connection->remote_ip()) if DEBUG;
+	debug("Sent fault: ".$response->content() . "\n") if DEBUG;
 
-      if ( DEBUG == 2 ) {
-            print STDERR "$content\n\n";
-      }
-
-      # All done!
-      return;
+    # All done!
+    return;
 }
-
 
 # All done with a transaction!
 sub TransactionDone {
-      # ARG0 = SOAP::Response object
-      my ($response, $done_string, $done_detail) = @_[ARG0, ARG1, ARG2];
+    # ARG0 = SOAP::Response object
+    my ( $kernel, $heap, $response, $done_string, $done_detail ) = @_[ KERNEL, HEAP, ARG0, ARG1, ARG2 ];
 
-      # Set up the response!
-      if ( ! defined $response->code ) {
-            $response->code( APP_OK );
-      }
-      $response->header( 'Content-Type', 'text/xml' );
+	debug("<<<<<< BUILDING DONE >>>>>>>") if DEBUG;
 
-	my $content;
-      if ( $_[STATE] eq 'RAWDONE' ) {
-            $content = $response->content();
-      } else {
-		my $struct = {
-                  result => {
-                        short => [ $done_string ],
-                        detail => [ $done_detail ],
-                  },
-            };
-		# Only set the content field if its defined.
-		if( defined($response->content) && length($response->content) ) {
-			$struct->{result}->{content} = [ $response->content ]; 
-		}
-		$content = XMLout( $struct , KeepRoot => 1, XMLDecl => 1);
+    # Set up the response!
+	$response->code( APP_OK );
 
-	}
-	$response->content($content);
+	# Set Content-Type header
+	$response->header( 'Content-Type', $heap->{CONTENTTYPE} );
 
-      # Send it off!
-      $_[KERNEL]->post( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'DONE', $response );
+	# Set default for short and detail
+	$done_string = "Done" unless $done_string;
+	$done_detail = "Sucessfully terminated your request" unless $done_detail;	
 
-      # Debug stuff
-      if ( DEBUG ) {
-            warn 'Finished processing ' . $_[STATE] . ' Service ' . $response->restservice . ' -> Method ' . $response->restmethod . ' for ' . $response->connection->remote_ip();
-      }
+	# Build answer
+	$response->content( build_response($done_string, $done_detail, $response->content) );
 
-      if ( DEBUG == 2 ) {
-            warn("DEBUG: ".$response->content."\n");
-      }
+	debug("Done code: " . $response->code ) if DEBUG;
+    debug("Done header: " . $response->headers->as_string ) if DEBUG;
+    debug("Done content: " . Dumper($response->content) ) if DEBUG;
 
-      # All done!
-      return;
+	# Marhsall the answer
+	$response->content( marshall($response->content, $response->header('Content-Type')) );
+
+    # Send it off!
+    $kernel->post( $heap->{'ALIAS'} . '-BACKEND', 'DONE', $response );
+
+    # Debug stuff
+    if (DEBUG) {
+		my $service = $response->restservice;
+		my $method = $response->restmethod;
+		my $ip = $response->connection->remote_ip();
+        debug('Finished processing '.$_[STATE]." Service $service -> Method $method for $ip");
+    }
+
+	debug("Sent done: " . $response->content . "\n" ) if DEBUG;
+
+    # All done!
+    return;
 }
-
 
 # Close the transaction
 sub TransactionClose {
-      # ARG0 = SOAP::Response object
-      my $response = $_[ARG0];
+	my ( $kernel, $heap, $response ) = @_[KERNEL, HEAP, ARG0];
 
-      # Send it off to the backend, signaling CLOSE
-      $_[KERNEL]->post( $_[HEAP]->{'ALIAS'} . '-BACKEND', 'CLOSE', $response );
+    # Send it off to the backend, signaling CLOSE
+    $kernel->post( $heap->{'ALIAS'} . '-BACKEND', 'CLOSE', $response );
 
-      # Debug stuff
-      if ( DEBUG ) {
-            warn 'Closing the socket of this Service ' . $response->restmethod . ' -> Method ' . $response->restmethod() . ' for ' . $response->connection->remote_ip();
-      }
+    # Debug stuff
+    if (DEBUG) {
+        debug('Closing the socket of this Service '
+          . $response->restmethod
+          . ' -> Method '
+          . $response->restmethod() . ' for '
+          . $response->connection->remote_ip());
+    }
 
-      # All done!
-      return;
+    # All done!
+    return;
 }
 
 1;
@@ -797,69 +736,211 @@ __END__
 
 POE::Component::Server::REST - publish POE event handlers via REST
 
+=head1 SHORT DESCRIPTION
+
+	POE::Component::Server::REST is a standalone POE Server which accepts RESTful HTTP requests.
+	In order to provide a complete solution kit for REST interfaces, this server comes along with
+	two flavours: YAML and XML. It either unmarshalls/marshalls YAML or XML. This is done by using
+	XML::Simple or YAML::Tiny. You simply get or reply hash-references on requests/responses, this
+	module unmarshalls/marshalls them for you.
+
 =head1 SYNOPSIS
 
-            use POE;
-            use POE::Component::Server::REST;
+	# This example can be found in the package's examples directory.
 
-            POE::Component::Server::REST->new(
-                    'ALIAS'         =>      'MyREST',
-                    'ADDRESS'       =>      'localhost',
-                    'PORT'          =>      32080,
-                    'HOSTNAME'      =>      'MyHost.com',
-            );
+	use POE;
+	use POE::Component::Server::REST;
 
-            POE::Session->create(
-                    'inline_states' =>      {
-                            '_start'        =>      \&setup_service,
-                            '_stop'         =>      \&shutdown_service,
-				    'GET/things'     =>    \&get_things,
-				    'POST/thing'    =>     \&add_thing,
-				    'PUT/thing'      =>    \&upd_thing,
-				    'DELETE/thing'   =>    \&del_thing,
-				    'GET/thing'      =>    \&get_thing,
+	POE::Component::Server::REST->new(
+			'ALIAS'         =>      'MyREST',
+			'ADDRESS'       =>      'localhost',
+			'PORT'          =>      8081,
+			'HOSTNAME'      =>      'MyHost.com',
+			'CONTENTTYPE'	=>		'text/yaml'		# or 'text/xml'
+	);
 
-                    },
-            );
+	POE::Session->create(
+		'inline_states' =>      {
+			'_start'        =>      \&start,
+			'_stop'         =>      \&stop,
+			'GET/things'     =>    \&get_things,
+			'POST/thing'    =>     \&add_thing,
+			'PUT/thing'      =>    \&upd_thing,
+			'DELETE/thing'   =>    \&del_thing,
+			'GET/thing'      =>    \&get_thing,
+		},
+	);
 
-            $poe_kernel->run;
-            exit 0;
+	$poe_kernel->run;
+	exit 0;
 
-            sub setup_service {
-                    my $kernel = $_[KERNEL];
-                    $kernel->alias_set( 'MyServer' );
-                    $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/things' );
-			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'POST/thing' );
-			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'PUT/thing' );
-			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'DELETE/thing' );
-			  $kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/thing' );
-            }
+	sub start {
+		my ($kernel, $heap) = @_[ KERNEL, HEAP ];
 
-            sub shutdown_service {
-			  $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/things' );
-                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'POST/thing' );
-                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'PUT/thing' );
-                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'DELETE/thing' );
-                    $kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/thing' );
-            }
+		# Some example preparations
+		$heap->{things} = {
+			1 => 'Foo',
+			2 => 'Bar',
+			3 => 'Slow',
+			4 => 'Joe',
+		};
 
-		sub get_item {
-			my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+		# Register each method
+		$kernel->alias_set( 'MyServer' );
+		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/things' );
+		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'POST/thing' );
+		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'PUT/thing' );
+		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'DELETE/thing' );
+		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/thing' );
+	}
 
-			# Key is the last http url path fragment /foo/baz/<key>
-			my $item = $somehash->{$key} if defined $key;
+	sub stop {
+		my ($kernel) = @_[ KERNEL ];
+		# Unregister each method
+		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/things' );
+		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'POST/thing' );
+		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'PUT/thing' );
+		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'DELETE/thing' );
+		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/thing' );
+	}
 
-			if($item) {
-				$response->content( $item );
-				$kernel->post( $session, 'RAWDONE', $response );
-				return;
-			} else {
-				# session, mode, response, http_status_code, simple msg, detailed msg
-				$kernel->post( $session, 'FAULT', $response, 404, 'NotFound', 'No such item.' );
-				return;
-			}
+	# Things
+	####################
+
+	sub get_thing {
+		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+		# Check if exists
+		if( exists($heap->{things}->{$key}) ) {
+			  my $val = $heap->{things}->{$key};
+
+			  # Build Repsonse.
+			  $response->content({
+				'thing' => {
+					'id' => $key,
+					'name' => $val },
+				});
+			  $kernel->post( $session, 'DONE', $response, );
+			  return;
+		} else {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_NOTFOUND, "NotFound", "Thing $key does not exists."  );
+			return;
+		}
+	}
+
+	sub get_things {
+		  my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+		  my $things = [];
+		  while( my ($id, $name) = each %{ $heap->{things} }) {
+				push(@$things, { id => $id, name => $name } );
+		  }
+		  $response->content({ things => $things });
+		  $kernel->post($session, 'DONE', $response);
+		  return;
+	}
+
+	sub add_thing {
+		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+		# POE::Component::Server::REST returns undef if there was an error while parsing the request.
+		my $content = $response->restbody;
+		unless( $content ) {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Error parsing document structure"  );
+			return;
 		}
 
+		# Check given ref structure...
+		unless( ref($content) eq 'HASH' and exists($content->{thing}) and exists($content->{thing}->{id}) and exists($content->{thing}->{name}) ) {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Unable to validate structure." );
+			return;
+		}
+
+		# Check for existence
+		if( exists($heap->{things}->{$key}) ) {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing $key exists already." );
+			return;
+		}
+
+		my $id = $content->{thing}->{id};
+		my $name = $content->{thing}->{name};
+
+		# Validate extracted field id
+		...
+
+		# Validate extracted field name
+		...	
+
+		# Add it
+		$heap->{things}->{$id} = $name;
+
+		# Done
+		$kernel->post( $session, 'DONE', $response, "Done", "Added thing $id -> $name"  );
+		return;
+
+	}
+
+	sub upd_thing {
+		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+		# Parse xml
+		my $content = $response->restbody;
+		unless( $content ) {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST,"Bad Request", "Error parsing document structure."  );
+			return;
+		}
+
+		# Sheck structure
+		unless( exists($content->{thing}) and exists($content->{thing}->{id}) && exists($content->{thing}->{name}) ) {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Unable to validate structure." );
+			return;
+		}
+
+		# Only proceed if referenced thing does exist
+		unless( exists($heap->{things}->{$key}) ) {
+			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing $key does not exist." );
+			return;
+		}
+
+		my $id = $content->{thing}->{id};
+		my $name = $content->{thing}->{name};
+
+		# Validate extracted field id
+		...
+
+		# Validate extracted field name
+		...
+
+		# Update thing
+		$heap->{things}->{$id} = $name;
+
+		# Done
+		$kernel->post( $session, 'DONE', $response, "Done", "Updated thing $id -> $name"  );
+		return;
+
+	}
+
+	sub del_thing {
+		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+		my $params = $response->restbody;
+
+		# Check if referenced thing does exists
+		unless( exists($heap->{things}->{$key}) ) {
+				$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, 'EXISTS', "Thing $key does not exist." );
+				return;
+		}
+
+		# Delete it 
+		delete $heap->{things}->{$key};
+
+		# Done
+		$kernel->post( $session, 'DONE', $response, "Done", "Successfully removed ththingg." );
+		return;
+
+	}
+
+	
 =head1 ABSTRACT
 
 	An easy to use REST daemon for POE-enabled programs
@@ -884,8 +965,7 @@ The standard way to use this module is to do this:
 
 POE::Component::Server::REST is a bolt-on component that can publish
 event handlers via REST over HTTP. Currently, this module only supports
-REST xml requests, work will be done in the future to support REST
-requests in other formats too. The HTTP server is done via
+REST xml or yaml requests. The HTTP server is done via
 POE::Component::Server::SimpleHTTP.
 
 =head2  Starting Server::REST
@@ -898,11 +978,10 @@ To start Server::REST, just call it's new method:
 				'PORT'          =>      11111,
 				'HOSTNAME'      =>      'MySite.com',
 				'HEADERS'       =>      {},
+				'CONTENTTYPE'	=>		'text/yaml',
 		);
 
 This method will die on error or return success.
-
-This constructor accepts only 7 options.
 
 =over 4
 
@@ -943,11 +1022,13 @@ $VERSION
 
 For more information, consult the HTTP::Headers module.
 
-=item C<MUSTUNDERSTAND>
+=item C<CONTENTTYPE>
 
-This is a boolean value, controlling whether Server::REST will check
-for this value in the Headers and Fault if it is present. This will
-default to true.
+Defines in what format request and responses should be 
+unmarshalled/marshalled. Current supported formats are: 
+
+	text/yaml (default)
+	text/xml
 
 =item C<SIMPLEHTTP>
 
@@ -1010,19 +1091,6 @@ There are only a few ways to communicate with Server::REST.
 			To get greater throughput and response time, do not post() to the DONE event, call() it!
 			However, this will force your program to block while servicing REST requests...
 
-=item C<RAWDONE>
-
-			This event accepts only one argument: the REST::Response object we sent to the handler.
-
-			Calling this event implies that this particular request is done, and will proceed to close the socket.
-
-			The only difference between this and the DONE event is that the content in $response->content() will not
-			be enclosed with an pre-defined xml result format. This is useful if you generate the xml yourself.
-
-			NOTE:
-					- The xml content does not need to have a <?xml version="1.0" encoding="UTF-8"> header
-					- If the xml is malformed or is not escaped properly, the client will get terribly confused!
-
 =item C<FAULT>
 
 			This event accepts five arguments:
@@ -1040,17 +1108,6 @@ There are only a few ways to communicate with Server::REST.
 					- HTTP Status = 500 ( if not defined )
 					- HTTP Header value of 'Content-Type' = 'text/xml'
 					- HTTP Content = Xml result envelope of the fault ( overwriting anything that was there )
-
-=item C<RAWFAULT>
-
-			This event accepts only one argument: the REST::Response object we sent to the handler.
-
-			Calling this event implies that this particular request is done, and will proceed to close the socket.
-
-			The only difference between this and the FAULT event is that you are given freedom to create your own xml for the
-			fault. It will be passed through intact to the client. 
-
-			This is very similar to the RAWDONE event, so go read the notes up there!
 
 =item C<CLOSE>
 
@@ -1103,22 +1160,33 @@ Simply experiment using Data::Dumper and you'll quickly get the hang of
 it!
 
 When you're done with the REST request, stuff whatever output you have
-into the content of the response object.
+into the content of the response object by passing it a HASH/ARRAY Reference.
 
-		$response->content( 'The result is ... ' );
+		$response->content({ Foo => 1 });
+
+IMPORTANT: I thought it might be smart to use a standard structure for all Responses. Your content ref
+will be wrapped into a response structure like the following one:
+
+	result => {
+			short => $short_done_or_fault_msg,
+			detail => $detail_done_or_fault_msg,
+			content => $your_struct,
+	}
+
+This struct is then beeing marshalled into XML/YAML.
 
 The only thing left to do is send it off to the DONE event :)
 
-		$_[KERNEL]->post( 'MyREST', 'DONE', $response );
+		$kernel->post( 'MyREST', 'DONE', $response );
 
 If there's an error, you can send it to the FAULT event, which will
 convert it into a REST fault.
 
-		$_[KERNEL]->post( 'MyREST', 'FAULT', $response, 'Client.Authentication', 'Invalid password' );
+		$kernel->post( 'MyREST', 'FAULT', $response, 'Client.Authentication', 'Invalid password' );
 
 =head2 Server::REST Notes
 
-This module is very picky about capitalization! and was copied with the
+This module is very picky about capitalization and copy&paste errors! and was copied with the
 authorization of the owner of POE::Component::Server::SOAP :) Thanks!
 
 All of the options are uppercase, to avoid confusion.
@@ -1127,9 +1195,6 @@ You can enable debugging mode by doing this:
 
 		sub POE::Component::Server::REST::DEBUG () { 1 }
 		use POE::Component::Server::REST;
-
-In the case you want to see the raw xml being received/sent to the
-client, set DEBUG to 2.
 
 =head2 Using SSL
 
@@ -1144,6 +1209,7 @@ it:
 		);
 
 		# And that's it provided you've already created the necessary key + certificate file :)
+		# EXPERIMENTAL -> See SIMPLEHTTP
 
 =head1 SUPPORT
 
@@ -1157,19 +1223,19 @@ it:
 
 =item    *   AnnoCPAN: Annotated CPAN documentation
 
-        L<http://annocpan.org/dist/POE-Component-Server-REST>
+        http://annocpan.org/dist/POE-Component-Server-REST
 
 =item    *   CPAN Ratings
 
-        L<http://cpanratings.perl.org/d/POE-Component-Server-REST>
+        http://cpanratings.perl.org/d/POE-Component-Server-REST
 
 =item    *   RT: CPAN's request tracker
 
-        L<http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-Server-REST>
+        http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-Server-REST
 
 =item    *   Search CPAN
 
-        L<http://search.cpan.org/dist/POE-Component-Server-REST>
+        http://search.cpan.org/dist/POE-Component-Server-REST
 
 =back
 
@@ -1178,33 +1244,35 @@ it:
     Please report any bugs or feature requests to
     "bug-poe-component-server-rest at rt.cpan.org", or through the web
     interface at
-    L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-Server-REST>.
-     I will be notified, and then you'll automatically be notified of
+    http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-Server-REST
+    I will be notified, and then you'll automatically be notified of
     progress on your bug as I make changes.
 
 =head1 SEE ALSO
     The examples directory that came with this component.
 
-    L<POE>
+    POE
 
-    L<HTTP::Response>
+    HTTP::Response
 
-    L<HTTP::Request>
+    HTTP::Request
 
-    L<POE::Component::Server::REST::Response>
+    POE::Component::Server::REST::Response
 
-    L<POE::Component::Server::SimpleHTTP>
+    POE::Component::Server::SimpleHTTP
 
-    L<XML::Twig>
+    XML::Simple
+	
+	YAML::Tiny
 
-    L<POE::Component::SSLify>
+    POE::Component::SSLify
 
 =head1 AUTHOR
 
     Jstebens <jstebens@cpan.org>
 
-    I used L<POE::Server::Component::SOAP> as base for this module and documentation.
-	There may be still L<POE::Server::Component::SOAP> artifacts spread throught the
+    I used POE::Server::Component::SOAP as base for this module and documentation.
+	There may be still POE::Server::Component::SOAP artifacts spread throught the
 	documentation and code. If you find those, please let me know.
 
 	Many thanks to Larwan "Apocalypse" Berke for the approval to use his code as base!
