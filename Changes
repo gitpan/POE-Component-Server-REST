@@ -1,5 +1,15 @@
 Revision history for Perl extension POE::Component::Server::REST.
 
+* 1.03
+
+	- Removed obsolete 'use vars' version declaration.
+    - Added YAML::Tiny to deps.
+    - Fixed failure when yaml doc cant be parsed.
+
+* 1.02
+
+	First working version.
+
 * 1.00
 
 	Fork of POE::Component::Server::SOAP by "Apocalypse"

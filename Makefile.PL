@@ -3,17 +3,18 @@ require 5.006;
 use ExtUtils::MakeMaker;
 WriteMakefile
 (
-          'PL_FILES' => {},
-          'INSTALLDIRS' => 'site',
-          'NAME' => 'POE::Component::Server::REST',
-          'EXE_FILES' => [],
-          'VERSION_FROM' => 'lib/POE/Component/Server/REST.pm',
-          'PREREQ_PM' => {
-                           'XML::Simple' => '2.18',
-                           'POE::Component::Server::SimpleHTTP' => '1.54',
-                           'POE::Session' => 0,
-                           'POE' => 0,
-                           'Carp' => 0
-                         }
-        )
+	'PL_FILES' => {},
+	'INSTALLDIRS' => 'site',
+	'NAME' => 'POE::Component::Server::REST',
+	'EXE_FILES' => [],
+	'VERSION_FROM' => 'lib/POE/Component/Server/REST.pm',
+	'PREREQ_PM' => {
+		'XML::Simple' => '2.18',
+		'YAML::Tiny' => '1.32',
+		'POE::Component::Server::SimpleHTTP' => '1.54',
+		'POE::Session' => 0,
+		'POE' => 0,
+		'Carp' => 0
+	}
+)
 ;

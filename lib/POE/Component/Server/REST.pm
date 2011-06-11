@@ -3,8 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-use vars qw( $VERSION );
-$VERSION = '1.02';
+our $VERSION = '1.03';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -247,7 +246,8 @@ sub unmarshall {
 		}
 
 		if( $format eq T_YAML ) {
-			$struct = Load($body);
+			$struct = eval { Load($body) };
+			return if($@);
 		}
     }
 	return $struct;
