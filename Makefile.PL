@@ -11,6 +11,7 @@ WriteMakefile
 	'PREREQ_PM' => {
 		'XML::Simple' => '2.18',
 		'YAML::Tiny' => '1.32',
+		'JSON' => '2.21',
 		'POE::Component::Server::SimpleHTTP' => '1.54',
 		'POE::Session' => 0,
 		'POE' => 0,

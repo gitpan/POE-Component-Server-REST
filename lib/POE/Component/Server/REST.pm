@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.03';
+our $VERSION = '1.04';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -15,6 +15,7 @@ use Data::Dumper;
 
 use XML::Simple;
 use YAML::Tiny;
+use JSON;
 
 # Our own modules
 use POE::Component::Server::REST::Response;
@@ -22,6 +23,7 @@ use POE::Component::Server::REST::Response;
 use constant {
 	T_YAML	=> 'text/yaml',
 	T_XML	=> 'text/xml',
+	T_JSON	=> 'text/json',
 	
     APP_OK             => 200,
     APP_CREATED        => 201,
@@ -160,7 +162,8 @@ sub new {
     if ( exists($opt{'CONTENTTYPE'}) and defined($opt{'CONTENTTYPE'}) and length($opt{'CONTENTTYPE'}) ) {
         $CONTENTTYPE = $opt{'CONTENTTYPE'};
         delete $opt{'CONTENTTYPE'};
-		croak("CONTENTTYPE needs to be of ".T_YAML." or ".T_XML) unless ( grep($CONTENTTYPE, (T_YAML, T_XML)) );
+		my $types = (T_YAML, T_XML, T_JSON);
+		croak("CONTENTTYPE needs to be of: ".join(",",@$types)) unless ( grep($CONTENTTYPE, @$types) );
     } else {
 
         # Set the default
@@ -242,13 +245,17 @@ sub unmarshall {
 
 		if( $format eq T_XML) {
 	        $struct = eval { XMLin($body, KeepRoot => 1 ) };
-    	    return if($@);
 		}
 
 		if( $format eq T_YAML ) {
 			$struct = eval { Load($body) };
-			return if($@);
 		}
+
+		if( $format eq T_JSON ) {
+			$struct = eval { from_json($body, { utf8 => 1 }) };
+		}
+
+		return if($@);
     }
 	return $struct;
 }
@@ -261,12 +268,17 @@ sub marshall {
 
 		if( $format eq T_XML) {
 			$string = eval { XMLout( $struct, KeepRoot => 1, XMLDecl => 1, NoAttr => 1 ) };
-			return if($@);
 		}
 		
 		if( $format eq T_YAML ) {
-			$string = Dump($struct);
+			$string = eval { Dump($struct) };
 		}
+
+		if( $format eq T_JSON ) {
+			$string = eval { to_json_($struct, { pretty => 1, utf8 => 1 }) };
+		}
+
+		return if($@);
 	}
 	return $string;
 }
@@ -1029,6 +1041,7 @@ unmarshalled/marshalled. Current supported formats are:
 
 	text/yaml (default)
 	text/xml
+	text/json
 
 =item C<SIMPLEHTTP>
 

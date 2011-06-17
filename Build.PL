@@ -24,6 +24,7 @@ my $build = Module::Build->new(
 		'POE::Component::Server::SimpleHTTP'	=> '1.54',	# bump version so we fix CLOSE issue
 		'XML::Simple'		=> '2.18',
 		'YAML::Tiny'		=> '1.32',
+		'JSON' => '2.21'
 
 		# FIXME stupid deps Test::Dependencies needs to see
 		'POE::Session'		=> 0,
