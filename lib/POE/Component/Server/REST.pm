@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.04';
+our $VERSION = '1.05';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -162,7 +162,7 @@ sub new {
     if ( exists($opt{'CONTENTTYPE'}) and defined($opt{'CONTENTTYPE'}) and length($opt{'CONTENTTYPE'}) ) {
         $CONTENTTYPE = $opt{'CONTENTTYPE'};
         delete $opt{'CONTENTTYPE'};
-		my $types = (T_YAML, T_XML, T_JSON);
+		my $types = [ T_YAML, T_XML, T_JSON ];
 		croak("CONTENTTYPE needs to be of: ".join(",",@$types)) unless ( grep($CONTENTTYPE, @$types) );
     } else {
 
@@ -275,7 +275,7 @@ sub marshall {
 		}
 
 		if( $format eq T_JSON ) {
-			$string = eval { to_json_($struct, { pretty => 1, utf8 => 1 }) };
+			$string = eval { to_json($struct, { pretty => 1, utf8 => 1 }) };
 		}
 
 		return if($@);

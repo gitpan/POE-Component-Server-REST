@@ -1,5 +1,8 @@
 Revision history for Perl extension POE::Component::Server::REST.
 
+* 1.05
+  - Fixed some problems with JSON marshalling. Thanks Franky.
+
 * 1.04
   - Added support for JSON by introducing the contenttype text/json
 
