@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.05';
+our $VERSION = '1.06';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -12,6 +12,8 @@ use POE;
 use POE::Session;
 use POE::Component::Server::SimpleHTTP;
 use Data::Dumper;
+use URI::Split qw(uri_split);
+use HTTP::Status qw(:constants);
 
 use XML::Simple;
 use YAML::Tiny;
@@ -24,24 +26,9 @@ use constant {
 	T_YAML	=> 'text/yaml',
 	T_XML	=> 'text/xml',
 	T_JSON	=> 'text/json',
-	
-    APP_OK             => 200,
-    APP_CREATED        => 201,
-    APP_ACCEPTED       => 202,
-    APP_NONAUTHORATIVE => 203,
-    APP_NOCONTENT      => 204,
-    APP_RESETCONTENT   => 205,
-    APP_PARTIALCONTENT => 206,
-
-    CLIENT_BADREQUEST   => 400,
-    CLIENT_UNAUTHORIZED => 401,
-    CLIENT_FORBIDDEN    => 403,
-    CLIENT_NOTFOUND     => 404,
-    CLIENT_TIMEOUT      => 408,
-
-    SERVER_INTERNALERROR => 500,
-    SERVER_UNIMPLEMENTED => 501,
 };
+
+my $DEFAULT_CONTENT = T_JSON;
 
 # Set some constants
 BEGIN {
@@ -78,11 +65,9 @@ sub new {
         delete $opt{'ALIAS'};
     } else {
 
-        # Debugging info...
-		debug('Using default ALIAS = RESTService') if DEBUG;
-
         # Set the default
-        $ALIAS = 'RESTService';
+        $ALIAS = 'rest';
+		debug("Using default ALIAS $ALIAS") if DEBUG;
 
         # Remove any lingering ALIAS
         if ( exists $opt{'ALIAS'} ) {
@@ -167,7 +152,7 @@ sub new {
     } else {
 
         # Set the default
-        $CONTENTTYPE = T_YAML;
+        $CONTENTTYPE = $DEFAULT_CONTENT;
 		debug("Using default CONTENTTYPE ( $CONTENTTYPE )") if DEBUG;
 
         # Remove any lingering CONTENTTYPE
@@ -407,11 +392,13 @@ sub AddMethod {
         $method = $event;
     }
 
+	$service = lc($service);
+
     # If we are debugging, check if we overwrote another method
     if (DEBUG) {
         if ( exists $heap->{'INTERFACES'}->{$service} ) {
             if ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
-                debug('Overwriting old method entry in the registry ( ' . $service . ' -> ' . $method . ' )');
+                debug('Overwriting old method entry in the registry ( ' . $service . ' -> ' . $method . ' )') if DEBUG;
             }
         }
     }
@@ -428,6 +415,8 @@ sub AddMethod {
 sub DeleteMethod {
     # ARG0: Service name, ARG1: Service method name
     my ( $kernel, $heap, $service, $method ) = @_[ KERNEL, HEAP, ARG0, ARG1 ];
+
+	$service = lc($service);
 
     # Validation
     if ( defined($service) and length($service) ) {
@@ -506,7 +495,7 @@ sub TransactionStart {
 
     # Check for error in parsing of request
     unless ( defined $request ) {
-        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Unable to parse HTTP query', );
+        $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', 'Unable to parse HTTP query', );
         return;
     }
 
@@ -516,71 +505,66 @@ sub TransactionStart {
 
 	# Validate REQUEST Method ie. POST, PUT, DELETE, GET
     unless ( defined($type) and length($type) ) {
-        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Invalid Request Method', );
+        $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', 'Invalid Request Method', );
         return;
-    }
-
-    # Validate the service
-    my $service;
-    my $query_string = $request->uri->query();
-    unless ( defined($query_string) and ($query_string =~ /\bsession=(.+$)/x) ) {
-
-        # Set service when there is only one service known.
-        my @services = keys %{ $heap->{'INTERFACES'} };
-        if ( scalar(@services) == 1 ) {
-            $service = $services[0];
-            debug("Only one service known, guess its this one $service") if DEBUG;
-        } else {
-            debug("Too many services to guess the right one: " . join( ",", @services ) ) if DEBUG;
-            $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Unable to parse the URI for the service', );
-            return;
-        }
-    } else {
-        # Set the service
-        $service = $1;
-    }
-
-    # Check to see if this service exists
-    unless ( exists($heap->{'INTERFACES'}->{$service}) ) {
-        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', "Unknown service: $service", );
-        return;
-    } else {
-        debug("Found service $service to be valid.");
     }
 
 	# Validate given ContentType
     debug("Received header: " . $request->header('Content-Type') ) if DEBUG;
     my ( $contenttype, undef ) = split( m/;/, $request->header('Content-Type') || '', 2 );
     unless ( $request->header('Content-Type') and $contenttype eq $heap->{'CONTENTTYPE'} ) {
-        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', 'Content-Type must be of: '.$heap->{CONTENTTYPE} );
+        $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', 'Content-Type must be of: '.$heap->{CONTENTTYPE} );
         return;
     }
 
-    # Get the method name
-    my $uri = $request->uri;
-    debug(" requested uri: $uri");
-    unless ( $uri =~ /(\/\D+)(\/\w+)?(\/)?(\?session=(.+))?$/ ) {
-        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request', "Unrecognized REST url structure: $uri", );
+	# extract the path
+	my $uri = $request->uri;
+	debug("Extracted URI: $uri") if DEBUG;
+	my (undef, undef, $path, undef) = uri_split($uri);
+
+    # Validate the service
+    my $service;
+	unless ( defined($path) and ($path =~ m/\/(\w+)(\/.+)?/) ) {
+            $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', 'Unable to parse the URI for the service', );
+            return;
+    } else {
+        # Set the service
+        $service = lc($1);
+		debug("Extracted service: $service") if DEBUG;
+		$path = $2;
+		debug("Extracted path: $path") if DEBUG;
+    }
+
+    # Check to see if this service exists
+    unless ( exists($heap->{'INTERFACES'}->{$service}) ) {
+		my $services = join(",",keys %{$heap->{'INTERFACES'}});
+        $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', "Unknown service: $service - valid ones: [$services]");
         return;
-    } 
+    } else {
+        debug("Found service $service to be valid.") if DEBUG;
+    }
 
-    # Get the uri + method
-    my $method  = $1 || '';
-    my $restkey = $2 || '';
+	# Extract the key
+	my $key;
+	my @resources = split(/\//, $path);
+	if( $resources[-1] =~ m/\d+/) {
+		# only set if its a digit
+		$key = pop(@resources);
+		$key =~ s/^\///;
+	}
+	debug("Extracted key: ". ($key ? $key : '')) if DEBUG;
 
-    # Remove trailing slash
+    # Get the method
+    my $method = join("/", @resources);
     $method  =~ s/\/$//;
-    $restkey =~ s/^\///;
-
-    # Add prefx with given HTTP request method eg. PUT/foo/baz/bar
     $method = "$type$method";
-    debug(" extracted method: $method") if DEBUG;
-    debug(" extracted key: $restkey")   if DEBUG;
+	debug("Extracted method: $method") if DEBUG;
+
 
     # Check to see if this method exists
     unless ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
         debug(" $method does not exists") if DEBUG;
-        $kernel->yield( 'FAULT', $response, CLIENT_BADREQUEST, 'Bad Request',
+        $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request',
             "Unknown method: $method (Available: " . join( ",", keys %{ $heap->{'INTERFACES'}->{$service} } ) . ")",
         );
         return;
@@ -588,7 +572,7 @@ sub TransactionStart {
 
     # Check for errors
     if ($@) {
-        $kernel->yield( 'FAULT', $response, SERVER_INTERNALERROR, 'Application Faulted', "Some errors occured while processing the request: $@", );
+        $kernel->yield( 'FAULT', $response, HTTP_INTERNAL_SERVER_ERROR, 'Application Faulted', "Some errors occured while processing the request: $@", );
         return;
     }
 
@@ -620,13 +604,14 @@ sub TransactionStart {
 
     # ReBless it ;)
     bless( $response, 'POE::Component::Server::REST::Response' );
+	debug("Received content: ".$request->content()."\n") if DEBUG;
 
     # Send it off to the handler!
-    $kernel->post( $heap->{'INTERFACES'}->{$service}->{$method}->[0], $heap->{'INTERFACES'}->{$service}->{$method}->[1], $response, $restkey, );
+	my ( $alias, $event ) = @{ $heap->{'INTERFACES'}->{$service}->{$method} };
+    $kernel->post( $alias, $event, $response, $key );
 
     # Debugging stuff
 	debug("Sending off to the handler: Service $service -> Method $method for " . $response->connection->remote_ip()) if DEBUG;
-	debug("Received content: ".$request->content()."\n") if DEBUG;
 
     # All done!
     return;
@@ -651,7 +636,7 @@ sub TransactionFault {
 
 	# Set default code
     $response->code( $fault_code );
-	$response->code(SERVER_INTERNALERROR) unless $fault_code;
+	$response->code(HTTP_INTERNAL_SERVER_ERROR) unless $fault_code;
 
 	# Build answer
 	$response->content(undef) unless $response->content;
@@ -685,7 +670,7 @@ sub TransactionDone {
 	debug("<<<<<< BUILDING DONE >>>>>>>") if DEBUG;
 
     # Set up the response!
-	$response->code( APP_OK );
+	$response->code( HTTP_OK );
 
 	# Set Content-Type header
 	$response->header( 'Content-Type', $heap->{CONTENTTYPE} );
@@ -768,7 +753,7 @@ POE::Component::Server::REST - publish POE event handlers via REST
 			'ADDRESS'       =>      'localhost',
 			'PORT'          =>      8081,
 			'HOSTNAME'      =>      'MyHost.com',
-			'CONTENTTYPE'	=>		'text/yaml'		# or 'text/xml'
+			'CONTENTTYPE'	=>		'text/json'		# or 'text/xml' or 'text/yaml'
 	);
 
 	POE::Session->create(
@@ -835,7 +820,7 @@ POE::Component::Server::REST - publish POE event handlers via REST
 			  $kernel->post( $session, 'DONE', $response, );
 			  return;
 		} else {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_NOTFOUND, "NotFound", "Thing $key does not exists."  );
+			$kernel->post( $session, 'FAULT', $response, HTTP_NOT_FOUND, "NotFound", "Thing $key does not exists."  );
 			return;
 		}
 	}
@@ -858,19 +843,19 @@ POE::Component::Server::REST - publish POE event handlers via REST
 		# POE::Component::Server::REST returns undef if there was an error while parsing the request.
 		my $content = $response->restbody;
 		unless( $content ) {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Error parsing document structure"  );
+			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Error parsing document structure"  );
 			return;
 		}
 
 		# Check given ref structure...
 		unless( ref($content) eq 'HASH' and exists($content->{thing}) and exists($content->{thing}->{id}) and exists($content->{thing}->{name}) ) {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Unable to validate structure." );
+			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Unable to validate structure." );
 			return;
 		}
 
 		# Check for existence
 		if( exists($heap->{things}->{$key}) ) {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing $key exists already." );
+			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing $key exists already." );
 			return;
 		}
 
@@ -898,19 +883,19 @@ POE::Component::Server::REST - publish POE event handlers via REST
 		# Parse xml
 		my $content = $response->restbody;
 		unless( $content ) {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST,"Bad Request", "Error parsing document structure."  );
+			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST,"Bad Request", "Error parsing document structure."  );
 			return;
 		}
 
 		# Sheck structure
 		unless( exists($content->{thing}) and exists($content->{thing}->{id}) && exists($content->{thing}->{name}) ) {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Unable to validate structure." );
+			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Unable to validate structure." );
 			return;
 		}
 
 		# Only proceed if referenced thing does exist
 		unless( exists($heap->{things}->{$key}) ) {
-			$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing $key does not exist." );
+			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing $key does not exist." );
 			return;
 		}
 
@@ -939,7 +924,7 @@ POE::Component::Server::REST - publish POE event handlers via REST
 
 		# Check if referenced thing does exists
 		unless( exists($heap->{things}->{$key}) ) {
-				$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, 'EXISTS', "Thing $key does not exist." );
+				$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, 'EXISTS', "Thing $key does not exist." );
 				return;
 		}
 
@@ -1000,7 +985,7 @@ This method will die on error or return success.
 =item C<ALIAS>
 
 This will set the alias Server::REST uses in the POE Kernel. This
-will default to "RESTServer"
+will default to "rest"
 
 =item C<ADDRESS>
 
@@ -1039,9 +1024,13 @@ For more information, consult the HTTP::Headers module.
 Defines in what format request and responses should be 
 unmarshalled/marshalled. Current supported formats are: 
 
-	text/yaml (default)
+	text/json (DEFAULT_CONTENT)
+	text/yaml 
 	text/xml
-	text/json
+
+Q: Why is JSON supported? I thought this is a pure JavaScript serializing language?
+A: It's widely spread across web development communities, so alot of stable tools and libraries are available for it.
+JSON is also the "part" of YAML which is actually used most and therefor the default. 
 
 =item C<SIMPLEHTTP>
 
@@ -1099,7 +1088,7 @@ There are only a few ways to communicate with Server::REST.
 
 			NOTE: This method automatically sets some parameters:
 					- HTTP Status = 200 ( if not defined )
-					- HTTP Header value of 'Content-Type' = 'text/xml'
+					- HTTP Header value of 'Content-Type' = DEFAULT_CONTENT
 
 			To get greater throughput and response time, do not post() to the DONE event, call() it!
 			However, this will force your program to block while servicing REST requests...
@@ -1108,10 +1097,10 @@ There are only a few ways to communicate with Server::REST.
 
 			This event accepts five arguments:
 					- the HTTP::Response object we sent to the handler
-					- REST Fault Code       ( not required -> defaults to 'Server' )
-					- REST Fault String     ( not required -> defaults to 'Application Faulted' )
-					- REST Fault Detail     ( not required )
-					- REST Fault Actor      ( not required )
+					- REST Fault Code       ( not required -> defaults to 500 )
+					- REST Fault String     ( not required -> defaults to 'Fault' )
+					- REST Fault Detail     ( not required -> defaults to 'Apllication faulted')
+					- REST Fault Actor      ( not required -> defaults to undef)
 
 			Again, calling this event implies that this particular request is done, and will proceed to close the socket.
 
@@ -1119,8 +1108,8 @@ There are only a few ways to communicate with Server::REST.
 
 			NOTE: This method automatically sets some parameters:
 					- HTTP Status = 500 ( if not defined )
-					- HTTP Header value of 'Content-Type' = 'text/xml'
-					- HTTP Content = Xml result envelope of the fault ( overwriting anything that was there )
+					- HTTP Header value of 'Content-Type' = DEFAULT_CONTENT
+					- HTTP Content = marshalled content of whatever type you have instantiated the server with. 
 
 =item C<CLOSE>
 

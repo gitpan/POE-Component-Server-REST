@@ -5,37 +5,19 @@ use strict;
 
 use POE;
 use POE::Component::Server::REST;
-use POE::Component::Server::REST::Response;
-use Data::Dumper;
-
-use XML::Simple;
-use YAML::Tiny qw(Dump Load);
+use HTTP::Status qw(:constants);
 
 use constant {
-      APP_OK => 200,
-      APP_CREATED => 201,
-      APP_ACCEPTED => 202,
-      APP_NONAUTHORATIVE => 203,
-      APP_NOCONTENT => 204,
-      APP_RESETCONTENT => 205,
-      APP_PARTIALCONTENT => 206,
-
-      CLIENT_BADREQUEST => 400,
-      CLIENT_UNAUTHORIZED => 401,
-      CLIENT_FORBIDDEN => 403,
-      CLIENT_NOTFOUND => 404,
-      CLIENT_TIMEOUT => 408,
-
-      SERVER_INTERNALERROR => 500,
-      SERVER_UNIMPLEMENTED => 501,
-
 	  T_XML => 'text/xml',
 	  T_YAML => 'text/yaml',
 };
 
 
-my $servicename = "RESTService";
-my $session = 'Example';
+# This is OUR session
+my $name = "THING";
+
+# This is the POE..REST server
+my $service = 'restservice';
 
 my @methods = (
 	'GET/things',
@@ -57,11 +39,10 @@ my $hostname = hostname();
 my $port = 8081; 
 
 POE::Component::Server::REST->new(
-    'ALIAS'         =>      $session,
+    'ALIAS'         =>      $service,
     'ADDRESS'       =>      $address,
     'PORT'          =>      8081,
     'HOSTNAME'      =>      $hostname,
-	'CONTENTTYPE'	=>		'text/yaml',
 );
 
 POE::Session->create(
@@ -93,11 +74,13 @@ sub start {
 		4 => 'Joe', 
 	};
 
-	$kernel->alias_set($servicename);
+	# Necessary in order to let POE..REST server
+    # know where to forward calls to
+	$kernel->alias_set($name);
 
 	# Register Service Methods
 	foreach my $m (@methods) {
-		$kernel->post( $session, 'ADDMETHOD', $servicename, $m );
+		$kernel->post( $service, 'ADDMETHOD', $name, $m );
 	}
 
 }
@@ -107,7 +90,7 @@ sub stop {
 
 	# Unregister Service Methods	
 	foreach my $m (@methods) {
-		$kernel->post( $session, 'DELMETHOD', $servicename, $m );
+		$kernel->post( $service, 'DELMETHOD', $name, $m );
 	}
 }
 
@@ -127,10 +110,10 @@ sub get_thing {
 				'id' => $key, 
 				'name' => $val }, 
 			});
-	      $kernel->post( $session, 'DONE', $response, );
+	      $kernel->post( $service, 'DONE', $response, );
 	      return;		
 	} else {
-		$kernel->post( $session, 'FAULT', $response, CLIENT_NOTFOUND, "NotFound", "Thing $key does not exists."  );
+		$kernel->post( $service, 'FAULT', $response, HTTP_NOT_FOUND, "NotFound", "Thing $key does not exists."  );
 		return;	
 	}
 }
@@ -143,7 +126,7 @@ sub get_things {
 			push(@$things, { id => $id, name => $name } );
 	  }
 	  $response->content({ things => $things });
-      $kernel->post($session, 'DONE', $response);
+      $kernel->post($service, 'DONE', $response);
       return;
 
 }
@@ -154,19 +137,19 @@ sub add_thing {
 	# POE::Component::Server::REST returns undef if there was an error while parsing the request.
 	my $content = $response->restbody;
 	unless( $content ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Error parsing document structure"  );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Error parsing document structure"  );
 		return;
 	}
 
 	# Check structure
 	unless( ref($content) eq 'HASH' and exists($content->{thing}) and exists($content->{thing}->{id}) and exists($content->{thing}->{name}) ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Unable to validate structure." );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Unable to validate structure." );
         return;
 	}
 
 	# Check for existence
 	if( exists($heap->{things}->{$key}) ) {
-		$kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing $key exists already." );
+		$kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing $key exists already." );
 		return;
 	}
 
@@ -175,13 +158,13 @@ sub add_thing {
 
 	# Validate extracted field id
 	unless( defined $id ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing id needs to be set!" );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing id needs to be set!" );
         return;
 	}
 
 	# Validate extracted field name
     unless( defined $name ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing name needs to be set!" );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing name needs to be set!" );
         return;
     }
 
@@ -189,7 +172,7 @@ sub add_thing {
 	$heap->{things}->{$id} = $name;
 
 	# Done
-	$kernel->post( $session, 'DONE', $response, "Done", "Added thing $id -> $name"  );
+	$kernel->post( $service, 'DONE', $response, "Done", "Added thing $id -> $name"  );
 	return;
 
 }
@@ -200,19 +183,19 @@ sub upd_thing {
     # Parse xml
     my $content = $response->restbody;
     unless( $content ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST,"Bad Request", "Error parsing document structure."  );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST,"Bad Request", "Error parsing document structure."  );
         return;
     }
 
 	# Sheck structure
     unless( exists($content->{thing}) and exists($content->{thing}->{id}) && exists($content->{thing}->{name}) ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Unable to validate structure." );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Unable to validate structure." );
         return;
     }
 
 	# Only proceed if referenced thing does exist
     unless( exists($heap->{things}->{$key}) ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing $key does not exist." );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing $key does not exist." );
         return;
     }
 
@@ -221,13 +204,13 @@ sub upd_thing {
 
     # Validate extracted field id
     unless( defined $id ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing id needs to be set!" );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing id needs to be set!" );
         return;
     }
 
     # Validate extracted field name
     unless( defined $name ) {
-        $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, "Bad Request", "Thing name needs to be set!" );
+        $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing name needs to be set!" );
         return;
     }
 
@@ -235,7 +218,7 @@ sub upd_thing {
     $heap->{things}->{$id} = $name;
 
 	# Done
-	$kernel->post( $session, 'DONE', $response, "Done", "Updated thing $id -> $name"  );
+	$kernel->post( $service, 'DONE', $response, "Done", "Updated thing $id -> $name"  );
 	return;
 
 }
@@ -247,13 +230,13 @@ sub del_thing {
 
 	my $apikey = $response->header('APIKEY');
 	unless( $apikey and $apikey eq "raiNaeR2ohnaefex0AeFaig7gujeiQuai8uezaach4oow5chaize9xuxuleiqu0z" ) {
-		$kernel->post( $session, 'FAULT', $response, CLIENT_UNAUTHORIZED, 'Access Denied', "You are not privileged to delete things." );
+		$kernel->post( $service, 'FAULT', $response, HTTP_UNAUTHORIZED, 'Access Denied', "You are not privileged to delete things." );
 		return;
 	}
 
     # Check if referenced thing does exists
     unless( exists($heap->{things}->{$key}) ) {
-            $kernel->post( $session, 'FAULT', $response, CLIENT_BADREQUEST, 'EXISTS', "Thing $key does not exist." );
+            $kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, 'EXISTS', "Thing $key does not exist." );
             return;
     }
 
@@ -261,7 +244,7 @@ sub del_thing {
 	delete $heap->{things}->{$key};
 
 	# Done
-	$kernel->post( $session, 'DONE', $response, "Done", "Successfully removed ththingg." );
+	$kernel->post( $service, 'DONE', $response, "Done", "Successfully removed ththingg." );
 	return;
 
 }

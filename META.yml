@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               POE-Component-Server-REST
-version:            1.05
+version:            1.06
 abstract:           ~
 author:  []
 license:            unknown
@@ -11,10 +11,12 @@ build_requires:
     ExtUtils::MakeMaker:  0
 requires:
     Carp:                 0
+    HTTP::Status:         5.805
     JSON:                 2.21
     POE:                  0
     POE::Component::Server::SimpleHTTP:  1.54
     POE::Session:         0
+    URI::Split:           1.35
     XML::Simple:          2.18
     YAML::Tiny:           1.32
 no_index:

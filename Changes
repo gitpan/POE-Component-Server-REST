@@ -1,5 +1,18 @@
 Revision history for Perl extension POE::Component::Server::REST.
 
+SourceCode and diffs can be found on: https://github.com/jstebens/POE-Component-Server-REST
+
+* 1.06
+  - Default content type is now JSON - see "Q: Why is JSON even supported?" in README/POD
+  - Services in URI are now case-insensitive ie. /Foo/baz and /foo/baz are now the same service "foo", this is not valid for paths behind services.
+  - Fixed the example server in order to improve understanding.
+  - Spit out a valid service list if addressed service wasnt found.
+  - Fixed some double declarations - for the sake of clean code.
+  - Changed the way how services are referenced in the URI. The URI should now be in the form of /<service>/<resources>/<key> 
+  - Fixed: #68826 by revamping the service/method/key extraction - query paramter ?session= is no longer supported - because I can.
+  - Splitting URIs is now down in a clean way using URI::Split, instead of reinventing the wheel. (breaking NIH)
+  - Removed all http status code constants and using the one of HTTP::Status (breaking INH)
+
 * 1.05
   - Fixed some problems with JSON marshalling. Thanks Franky.
 

@@ -19,20 +19,15 @@ my $build = Module::Build->new(
 	'add_to_cleanup'	=> [ 'META.yml', 'Makefile.PL', 'README', 'Makefile' ],	# automatically generated
 
 	'requires'		=> {
-		# Networking
 		'POE'				=> 0,
-		'POE::Component::Server::SimpleHTTP'	=> '1.54',	# bump version so we fix CLOSE issue
+		'POE::Component::Server::SimpleHTTP'	=> '1.54',	
 		'XML::Simple'		=> '2.18',
 		'YAML::Tiny'		=> '1.32',
-		'JSON' => '2.21'
-
-		# FIXME stupid deps Test::Dependencies needs to see
+		'JSON' => '2.21',
+		'URI::Split' => '1.35',
+		'HTTP::Status' => '5.805',
 		'POE::Session'		=> 0,
-
-		# Perl stuff
 		'Carp'		=> 0,
-
-		# minimum perl version
 		'perl'		=> '5.006',
 	},
 );
