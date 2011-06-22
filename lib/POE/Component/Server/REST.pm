@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.07';
+our $VERSION = '1.08';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -792,252 +792,102 @@ __END__
 
 =head1 NAME
 
-POE::Component::Server::REST - publish POE event handlers via REST
+POE::Component::Server::REST - a solution kit for REST interfaces.
 
 =head1 SHORT DESCRIPTION
 
-	POE::Component::Server::REST is a standalone POE Server which accepts RESTful HTTP requests.
-	In order to provide a complete solution kit for REST interfaces, this server comes along with
-	two flavours: YAML and XML. It either unmarshalls/marshalls YAML or XML. This is done by using
-	XML::Simple or YAML::Tiny. You simply get or reply hash-references on requests/responses, this
-	module unmarshalls/marshalls them for you.
+POE::Component::Server::REST is a solution kit for REST interfaces.
+
+	- Delegates requests to the appropriate hierarchic path's method.
+	- Unmarshalls/marshalls from/to JSON/XML/YAML
+	- Delivers request content as hashref to the appropriate method.
+	- Delivers request keys as string to the appropriate method.
 
 =head1 SYNOPSIS
 
-	# This example can be found in the package's examples directory.
+	NOTE: The whole example can be found in the package's examples directory.
 
 	use POE;
+	sub POE::Component::Server::REST::DEBUG() { 1 };
 	use POE::Component::Server::REST;
+	use HTTP::Status qw(:constants);
+	use Sys::Hostname;
 
+	# This is the POE..REST server
+	my $service = 'restservice';
 	POE::Component::Server::REST->new(
-			'ALIAS'         =>      'MyREST',
-			'ADDRESS'       =>      'localhost',
-			'PORT'          =>      8081,
-			'HOSTNAME'      =>      'MyHost.com',
-			'CONTENTTYPE'	=>		'text/json'		# or 'text/xml' or 'text/yaml'
+		'ALIAS'         => $service,
+		'ADDRESS'       => '0.0.0.0',
+		'PORT'          => 8081,
+		'HOSTNAME'      => hostname(),
+		'CONTENTTYPE'   => 'text/json',
 	);
 
+	# The URI paths mapped to events
+	my $methods = {
+		'_start'        =>  \&start,
+		'_stop'         =>  \&stop,
+		'GET/author'     =>  \&get_author,
+		'GET/authors'    =>  \&get_authors,
+		'GET/author/douglas/adams' => \&get_special,
+		'POST/author'    =>  \&add_author,
+		'PUT/author'     =>  \&upd_author,
+		'DELETE/author'  =>  \&del_author,
+	};
+
+	# This is OUR session
+	my $name = "library";
 	POE::Session->create(
-		'inline_states' =>      {
-			'_start'        =>      \&start,
-			'_stop'         =>      \&stop,
-			'GET/things'     =>    \&get_things,
-			'POST/thing'    =>     \&add_thing,
-			'PUT/thing'      =>    \&upd_thing,
-			'DELETE/thing'   =>    \&del_thing,
-			'GET/thing'      =>    \&get_thing,
-		},
+		'inline_states' => $methods
 	);
 
-	$poe_kernel->run;
+	POE::Kernel->run;
 	exit 0;
 
-	sub start {
-		my ($kernel, $heap) = @_[ KERNEL, HEAP ];
-
-		# Some example preparations
-		$heap->{things} = {
-			1 => 'Foo',
-			2 => 'Bar',
-			3 => 'Slow',
-			4 => 'Joe',
-		};
-
-		# Register each method
-		$kernel->alias_set( 'MyServer' );
-		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/things' );
-		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'POST/thing' );
-		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'PUT/thing' );
-		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'DELETE/thing' );
-		$kernel->post( 'MyREST', 'ADDMETHOD', 'MyServer', 'GET/thing' );
-	}
-
-	sub stop {
-		my ($kernel) = @_[ KERNEL ];
-		# Unregister each method
-		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/things' );
-		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'POST/thing' );
-		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'PUT/thing' );
-		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'DELETE/thing' );
-		$kernel->post( 'MyREST', 'DELMETHOD', 'MyServer', 'GET/thing' );
-	}
-
-	# Things
-	####################
-
-	sub get_thing {
-		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
-
-		# Check if exists
-		if( exists($heap->{things}->{$key}) ) {
-			  my $val = $heap->{things}->{$key};
-
-			  # Build Repsonse.
-			  $response->content({
-				'thing' => {
-					'id' => $key,
-					'name' => $val },
-				});
-			  $kernel->post( $session, 'DONE', $response, );
-			  return;
-		} else {
-			$kernel->post( $session, 'FAULT', $response, HTTP_NOT_FOUND, "NotFound", "Thing $key does not exists."  );
-			return;
-		}
-	}
-
-	sub get_things {
-		  my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
-
-		  my $things = [];
-		  while( my ($id, $name) = each %{ $heap->{things} }) {
-				push(@$things, { id => $id, name => $name } );
-		  }
-		  $response->content({ things => $things });
-		  $kernel->post($session, 'DONE', $response);
-		  return;
-	}
-
-	sub add_thing {
-		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
-
-		# POE::Component::Server::REST returns undef if there was an error while parsing the request.
-		my $content = $response->restbody;
-		unless( $content ) {
-			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Error parsing document structure"  );
-			return;
-		}
-
-		# Check given ref structure...
-		unless( ref($content) eq 'HASH' and exists($content->{thing}) and exists($content->{thing}->{id}) and exists($content->{thing}->{name}) ) {
-			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Unable to validate structure." );
-			return;
-		}
-
-		# Check for existence
-		if( exists($heap->{things}->{$key}) ) {
-			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing $key exists already." );
-			return;
-		}
-
-		my $id = $content->{thing}->{id};
-		my $name = $content->{thing}->{name};
-
-		# Validate extracted field id
-		...
-
-		# Validate extracted field name
-		...	
-
-		# Add it
-		$heap->{things}->{$id} = $name;
-
-		# Done
-		$kernel->post( $session, 'DONE', $response, "Done", "Added thing $id -> $name"  );
-		return;
-
-	}
-
-	sub upd_thing {
-		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
-
-		# Parse xml
-		my $content = $response->restbody;
-		unless( $content ) {
-			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST,"Bad Request", "Error parsing document structure."  );
-			return;
-		}
-
-		# Sheck structure
-		unless( exists($content->{thing}) and exists($content->{thing}->{id}) && exists($content->{thing}->{name}) ) {
-			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Unable to validate structure." );
-			return;
-		}
-
-		# Only proceed if referenced thing does exist
-		unless( exists($heap->{things}->{$key}) ) {
-			$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, "Bad Request", "Thing $key does not exist." );
-			return;
-		}
-
-		my $id = $content->{thing}->{id};
-		my $name = $content->{thing}->{name};
-
-		# Validate extracted field id
-		...
-
-		# Validate extracted field name
-		...
-
-		# Update thing
-		$heap->{things}->{$id} = $name;
-
-		# Done
-		$kernel->post( $session, 'DONE', $response, "Done", "Updated thing $id -> $name"  );
-		return;
-
-	}
-
-	sub del_thing {
-		my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
-
-		my $params = $response->restbody;
-
-		# Check if referenced thing does exists
-		unless( exists($heap->{things}->{$key}) ) {
-				$kernel->post( $session, 'FAULT', $response, HTTP_BAD_REQUEST, 'EXISTS', "Thing $key does not exist." );
-				return;
-		}
-
-		# Delete it 
-		delete $heap->{things}->{$key};
-
-		# Done
-		$kernel->post( $session, 'DONE', $response, "Done", "Successfully removed ththingg." );
-		return;
-
-	}
-
+	sub get_author { ... }
+	sub get_authors { ... }
+	sub get_special { ... }
+	sub add_author { ... }
+	sub upd_author { ... }
+	sub del_author { ... }	
 	
 =head1 ABSTRACT
 
-	An easy to use REST daemon for POE-enabled programs
+	A complete solution kit for REST interfaces.
 
 =head1 DESCRIPTION
 
 This module makes serving REST requests a breeze in POE.
 
-The hardest thing to understand in this module is the REST Body. That's
-it!
+The hardest thing to understand in this module is the REST Body. That's it!
 
 The standard way to use this module is to do this:
 
-		use POE;
-		use POE::Component::Server::REST;
+	use POE;
+	use POE::Component::Server::REST;
 
-		POE::Component::Server::REST->new( ... );
+	POE::Component::Server::REST->new( ... );
 
-		POE::Session->create( ... );
+	POE::Session->create( ... );
 
-		POE::Kernel->run();
+	POE::Kernel->run();
 
-POE::Component::Server::REST is a bolt-on component that can publish
-event handlers via REST over HTTP. Currently, this module only supports
-REST xml or yaml requests. The HTTP server is done via
-POE::Component::Server::SimpleHTTP.
+POE::Component::Server::REST is a bolt-on component that can publish event handlers via REST over HTTP. 
+Currently, this module only supports JSON, XML or YAML requests. 
+The HTTP server is done via POE::Component::Server::SimpleHTTP.
 
 =head2  Starting Server::REST
 
 To start Server::REST, just call it's new method:
 
-		POE::Component::Server::REST->new(
-				'ALIAS'         =>      'MyREST',
-				'ADDRESS'       =>      '192.168.1.1',
-				'PORT'          =>      11111,
-				'HOSTNAME'      =>      'MySite.com',
-				'HEADERS'       =>      {},
-				'CONTENTTYPE'	=>		'text/yaml',
-		);
+	POE::Component::Server::REST->new(
+		'ALIAS'         =>      'MyREST',
+		'ADDRESS'       =>      '192.168.1.1',
+		'PORT'          =>      11111,
+		'HOSTNAME'      =>      'MySite.com',
+		'HEADERS'       =>      {},
+		'CONTENTTYPE'	=>		'text/json',
+	);
 
 This method will die on error or return success.
 
@@ -1045,23 +895,21 @@ This method will die on error or return success.
 
 =item C<ALIAS>
 
-This will set the alias Server::REST uses in the POE Kernel. This
+This will set the alias for the REST Service Session used in the POE Kernel. This
 will default to "rest"
 
 =item C<ADDRESS>
 
-This value will be passed to POE::Component::Server::SimpleHTTP to
-bind to.
+This value will be passed to POE::Component::Server::SimpleHTTP to bind to.
 
 Examples: 
-		ADDRESS => 0 # Bind to all addresses + localhost 
-		ADDRESS => 'localhost' # Bind to localhost 
-		ADDRESS => '192.168.1.1' # Bindto specified IP
+	ADDRESS => 0 # Bind to all addresses + localhost 
+	ADDRESS => 'localhost' # Bind to localhost 
+	ADDRESS => '192.168.1.1' # Bindto specified IP
 
 =item C<PORT>
 
-This value will be passed to POE::Component::Server::SimpleHTTP to
-bind to.
+This value will be passed to POE::Component::Server::SimpleHTTP to bind to.
 
 =item C<HOSTNAME>
 
@@ -1075,8 +923,7 @@ This should be a hashref, that will become the default headers on
 all HTTP::Response objects. You can override this in individual
 requests by setting it via $response->header( ... )
 
-The default header is: Server => 'POE::Component::Server::REST/' .
-$VERSION
+The default header is: Server => "POE::Component::Server::REST/$VERSION"
 
 For more information, consult the HTTP::Headers module.
 
@@ -1095,14 +942,11 @@ JSON is also the "part" of YAML which is actually used most and therefor the def
 
 =item C<SIMPLEHTTP>
 
-This allows you to pass options to the SimpleHTTP backend. One of
-the real reasons is to support SSL in Server::REST, yay! To learn
-how to use SSL, please consult the
-POE::Component::Server::SimpleHTTP documentation. Of course, you
-could totally screw up things, just use this with caution :)
+This allows you to pass options to the SimpleHTTP backend. One of the real reasons is to support SSL in Server::REST, yay! 
+To learn how to use SSL, please consult the POE::Component::Server::SimpleHTTP documentation. 
+Of course, you could totally screw up things, just use this with caution :)
 
-You must pass a hash reference as the value, because it will be
-expanded and put in the Server::SimpleHTTP->new() constructor.
+You must pass a hash reference as the value, because it will be expanded and put in the Server::SimpleHTTP->new() constructor.
 
 =back
 
@@ -1114,138 +958,134 @@ There are only a few ways to communicate with Server::REST.
 
 =item C<ADDMETHOD>
 
-			This event accepts four arguments:
-					- The intended session alias
-					- The intended session event
-					- The public service name       ( not required -> defaults to session alias )
-					- The public method name        ( not required -> defaults to session event )
+	This event accepts four arguments:
+		- The intended session alias
+		- The intended session event
+		- The public service name       ( not required -> defaults to session alias )
+		- The public method name        ( not required -> defaults to session event )
 
-			Calling this event will add the method to the registry.
-
-			NOTE: This will overwrite the old definition of a method if it exists!
+	Calling this event will add the method to the registry.
+	NOTE: This will overwrite the old definition of a method if it exists!
 
 =item C<DELMETHOD>
 
-			This event accepts two arguments:
-					- The service name
-					- The method name
+	This event accepts two arguments:
+		- The service name
+		- The method name
 
-			Calling this event will remove the method from the registry.
+	Calling this event will remove the method from the registry.
 
-			NOTE: if the service now contains no methods, it will also be removed.
+	NOTE: if the service now contains no methods, it will also be removed.
 
 =item C<DELSERVICE>
 
-			This event accepts one argument:
-					- The service name
+	This event accepts one argument:
+		- The service name
 
-			Calling this event will remove the entire service from the registry.
+	Calling this event will remove the entire service from the registry.
 
 =item C<DONE>
 
-			This event accepts only one argument: the REST::Response object we sent to the handler.
+	This event accepts only one argument: the REST::Response object we sent to the handler.
 
-			Calling this event implies that this particular request is done, and will proceed to close the socket.
+	Calling this event implies that this particular request is done, and will proceed to close the socket.
 
-			NOTE: This method automatically sets some parameters:
-					- HTTP Status = 200 ( if not defined )
-					- HTTP Header value of 'Content-Type' = DEFAULT_CONTENT
+	NOTE: This method automatically sets some parameters:
+		- HTTP Status = 200 ( if not defined )
+		- HTTP Header value of 'Content-Type' = DEFAULT_CONTENT
 
-			To get greater throughput and response time, do not post() to the DONE event, call() it!
-			However, this will force your program to block while servicing REST requests...
+	To get greater throughput and response time, do not post() to the DONE event, call() it!
+	However, this will force your program to block while servicing REST requests...
 
 =item C<FAULT>
 
-			This event accepts five arguments:
-					- the HTTP::Response object we sent to the handler
-					- REST Fault Code       ( not required -> defaults to 500 )
-					- REST Fault String     ( not required -> defaults to 'Fault' )
-					- REST Fault Detail     ( not required -> defaults to 'Apllication faulted')
-					- REST Fault Actor      ( not required -> defaults to undef)
+	This event accepts five arguments:
+		- the HTTP::Response object we sent to the handler
+		- REST Fault Code       ( not required -> defaults to 500 )
+		- REST Fault String     ( not required -> defaults to 'Fault' )
+		- REST Fault Detail     ( not required -> defaults to 'Apllication faulted')
+		- REST Fault Actor      ( not required -> defaults to undef)
 
-			Again, calling this event implies that this particular request is done, and will proceed to close the socket.
+	Again, calling this event implies that this particular request is done, and will proceed to close the socket.
 
-			Calling this event will generate a REST Fault and return it to the client.
+	Calling this event will generate a REST Fault and return it to the client.
 
-			NOTE: This method automatically sets some parameters:
-					- HTTP Status = 500 ( if not defined )
-					- HTTP Header value of 'Content-Type' = DEFAULT_CONTENT
-					- HTTP Content = marshalled content of whatever type you have instantiated the server with. 
+	NOTE: This method automatically sets some parameters:
+		- HTTP Status = 500 ( if not defined )
+		- HTTP Header value of 'Content-Type' = DEFAULT_CONTENT
+		- HTTP Content = marshalled content of whatever type you have instantiated the server with. 
 
 =item C<CLOSE>
 
-			This event accepts only one argument: the REST::Response object we sent to the handler.
+	This event accepts only one argument: the REST::Response object we sent to the handler.
 
-			Calling this event will proceed to close the socket, not sending any output.
+	Calling this event will proceed to close the socket, not sending any output.
 
 =item C<STARTLISTEN>
 
-			Starts the listening socket, if it was shut down
+	Starts the listening socket, if it was shut down
 
 =item C<STOPLISTEN>
 
-			Simply a wrapper for SHUTDOWN GRACEFUL, but will not shutdown Server::REST if there is no more requests
+	Simply a wrapper for SHUTDOWN GRACEFUL, but will not shutdown Server::REST if there is no more requests
 
 =item C<SHUTDOWN>
 
-			Without arguments, Server::REST does this:
-					Close the listening socket
-					Kills all pending requests by closing their sockets
-					Removes it's alias
+	Without arguments, Server::REST does this:
+		Close the listening socket
+		Kills all pending requests by closing their sockets
+		Removes it's alias
 
-			With an argument of 'GRACEFUL', Server::REST does this:
-					Close the listening socket
-					Waits for all pending requests to come in via DONE/FAULT/CLOSE, then removes it's alias
+	With an argument of 'GRACEFUL', Server::REST does this:
+		Close the listening socket
+		Waits for all pending requests to come in via DONE/FAULT/CLOSE, then removes it's alias
 
 =back
 
 =head2 Processing Requests
 
-if you're new to the world of REST, reading RESTful documentation is 
-recommended! 
+Ff you're new to the world of REST, reading RESTful documentation is recommended! 
 
-Now, once you have set up the services/methods, what do you expect from
-Server::REST? Every request is pretty straightforward, you just get a
-Server::REST::Response object in ARG0 and an optional KEY identifier in ARG1.
+Now, once you have set up the services/methods, what do you expect fromServer::REST? 
+Every request is pretty straightforward, you just get a Server::REST::Response object in ARG0 and an optional KEY identifier in ARG1.
 
-		The Server::REST::Response object contains a wealth of information about the specified request:
-				- There is the SimpleHTTP::Connection object, which gives you connection information
-				- There is the various REST accessors provided via Server::REST::Response
-				- There is the HTTP::Request object
+	The Server::REST::Response object contains a wealth of information about the specified request:
+		- There is the SimpleHTTP::Connection object, which gives you connection information
+		- There is the various REST accessors provided via Server::REST::Response
+		- There is the HTTP::Request object
 
-		Example information you can get:
-				$response->connection->remote_ip()      # IP of the client
-				$response->restrequest->uri()           # Original URI
-				$response->restmethod()                 # The SOAP method that was called
-				$response->restbody()                   # The arguments to the method
+	Example information you can get:
+		$response->connection->remote_ip()      # IP of the client
+		$response->restrequest->uri()           # Original URI
+		$response->restmethod()                 # The SOAP method that was called
+		$response->restbody()                   # The arguments to the method
 
-Simply experiment using Data::Dumper and you'll quickly get the hang of
-it!
+Simply experiment using Data::Dumper and you'll quickly get the hang of it!
 
 When you're done with the REST request, stuff whatever output you have
 into the content of the response object by passing it a HASH/ARRAY Reference.
 
-		$response->content({ Foo => 1 });
+	$response->content({ Foo => 1 });
 
 IMPORTANT: I thought it might be smart to use a standard structure for all Responses. Your content ref
 will be wrapped into a response structure like the following one:
 
 	result => {
-			short => $short_done_or_fault_msg,
-			detail => $detail_done_or_fault_msg,
-			content => $your_struct,
+		short => $short_done_or_fault_msg,
+		detail => $detail_done_or_fault_msg,
+		content => $your_struct,
 	}
 
 This struct is then beeing marshalled into XML/YAML.
 
 The only thing left to do is send it off to the DONE event :)
 
-		$kernel->post( 'MyREST', 'DONE', $response );
+	$kernel->post( 'MyREST', 'DONE', $response );
 
 If there's an error, you can send it to the FAULT event, which will
 convert it into a REST fault.
 
-		$kernel->post( 'MyREST', 'FAULT', $response, 'Client.Authentication', 'Invalid password' );
+	$kernel->post( 'MyREST', 'FAULT', $response, 'Client.Authentication', 'Invalid password' );
 
 =head2 Server::REST Notes
 
@@ -1256,29 +1096,28 @@ All of the options are uppercase, to avoid confusion.
 
 You can enable debugging mode by doing this:
 
-		sub POE::Component::Server::REST::DEBUG () { 1 }
-		use POE::Component::Server::REST;
+	sub POE::Component::Server::REST::DEBUG () { 1 }
+	use POE::Component::Server::REST;
 
 =head2 Using SSL
 
-So you want to use SSL in Server::REST? Here's a example on how to do
-it:
+So you want to use SSL in Server::REST? Here's a example on how to do it:
 
-		POE::Component::Server::REST->new(
-				...
-				'SIMPLEHTTP'    =>      {
-						'SSLKEYCERT'    =>      [ 'public-key.pem', 'public-cert.pem' ],
-				},
-		);
+	POE::Component::Server::REST->new(
+		...
+		'SIMPLEHTTP'    =>      {
+				'SSLKEYCERT'    =>      [ 'public-key.pem', 'public-cert.pem' ],
+		},
+	);
 
-		# And that's it provided you've already created the necessary key + certificate file :)
-		# EXPERIMENTAL -> See SIMPLEHTTP
+	# And that's it provided you've already created the necessary key + certificate file :)
+	# EXPERIMENTAL -> See SIMPLEHTTP
 
 =head1 SUPPORT
 
     You can find documentation for this module with the perldoc command.
 
-        perldoc POE::Component::Server::REST
+	perldoc POE::Component::Server::REST
 
 =head2 Websites
 
@@ -1286,30 +1125,27 @@ it:
 
 =item    *   AnnoCPAN: Annotated CPAN documentation
 
-        http://annocpan.org/dist/POE-Component-Server-REST
+	http://annocpan.org/dist/POE-Component-Server-REST
 
 =item    *   CPAN Ratings
 
-        http://cpanratings.perl.org/d/POE-Component-Server-REST
+	http://cpanratings.perl.org/d/POE-Component-Server-REST
 
 =item    *   RT: CPAN's request tracker
 
-        http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-Server-REST
+	http://rt.cpan.org/NoAuth/Bugs.html?Dist=POE-Component-Server-REST
 
 =item    *   Search CPAN
 
-        http://search.cpan.org/dist/POE-Component-Server-REST
+	http://search.cpan.org/dist/POE-Component-Server-REST
 
 =back
 
 =head2  Bugs
 
-    Please report any bugs or feature requests to
-    "bug-poe-component-server-rest at rt.cpan.org", or through the web
-    interface at
-    http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-Server-REST
-    I will be notified, and then you'll automatically be notified of
-    progress on your bug as I make changes.
+    Please report any bugs or feature requests to "bug-poe-component-server-rest at rt.cpan.org", or through the web
+    interface at http://rt.cpan.org/NoAuth/ReportBug.html?Queue=POE-Component-Server-REST
+    I will be notified, and then you'll automatically be notified of progress on your bug as I make changes.
 
 =head1 SEE ALSO
     The examples directory that came with this component.
@@ -1325,7 +1161,7 @@ it:
     POE::Component::Server::SimpleHTTP
 
     XML::Simple
-	
+
 	YAML::Tiny
 
     POE::Component::SSLify
