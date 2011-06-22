@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.06';
+our $VERSION = '1.07';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -29,12 +29,11 @@ use constant {
 };
 
 my $DEFAULT_CONTENT = T_JSON;
+my $DEFAULT_NODE = '/';
 
 # Set some constants
 BEGIN {
-    if ( !defined &DEBUG ) {
-        *DEBUG = sub () { 2 }
-    }
+	*DEBUG = sub () { 0 } unless defined(&DEBUG);
 }
 
 sub debug {
@@ -206,6 +205,7 @@ sub new {
 
         # Our own heap
         'heap' => {
+			'TREE'			 => {},
             'INTERFACES'     => {},
             'CONTENT'        => {},
             'ALIAS'          => $ALIAS,
@@ -403,6 +403,23 @@ sub AddMethod {
         }
     }
 
+	# Initialize service in TREE if not present
+	unless( exists $heap->{TREE}->{$service} ) {
+		$heap->{TREE}->{$service} = {};
+	}
+
+	# Add it to our method tree
+	my @parts = split(/\//, $method);
+    my $max = scalar(@parts);
+    my $tmp = $heap->{TREE}->{$service};
+    foreach my $part (@parts) {
+        $max--;
+        $tmp->{$part} = {} unless exists($tmp->{$part});
+        $tmp = $tmp->{$part};
+		# Set the default node at the leaf
+        $tmp->{$DEFAULT_NODE} = [ $alias, $event] if $max == 0;
+    }
+
     # Add it to our INTERFACES
     $heap->{'INTERFACES'}->{$service}->{$method} = [ $alias, $event ];
 	debug("Added method $method to service $service") if DEBUG;
@@ -424,8 +441,34 @@ sub DeleteMethod {
         # Validation
         if ( defined($method) and length($method) ) {
 
-            # Validation
-            if ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
+				# Traversing the tree!
+				my @parts = split(/\//, $method);
+				my $max = scalar(@parts);
+				my $path = $heap->{TREE}->{$service};
+				my $tmp = {};
+				foreach my $part (@parts) {
+					$max--;
+					if(exists($path->{$part})) {
+						if($max > 0) {
+							# We havent finished searching yet
+							$tmp->{$part} = {};
+							$tmp = $tmp->{$part};
+							$path = $path->{$part};
+						} else {
+							# We should be at the leaf
+							if( keys(%{$path->{$part}}) == 1 && exists($path->{$part}->{$DEFAULT_NODE})) {
+								delete($path->{$part});
+								debug("Removed $method in tree") if DEBUG;
+							} else {
+								debug("Element '$part' is not empty.") if DEBUG;
+								return;
+							}
+						}
+					} else {
+						debug("Method $method is nonexistent.") if DEBUG;
+						return;
+					}
+				}
 
                 # Delete it!
                 delete $heap->{'INTERFACES'}->{$service}->{$method};
@@ -443,9 +486,7 @@ sub DeleteMethod {
 
                 # Return success
                 return 1;
-            } else {
-				debug("Tried to delete a nonexistant Method in Service -> $service: $method") if DEBUG;
-            }
+
         } else {
 			debug("Did not get a method to delete in Service -> $service") if DEBUG;
         }
@@ -536,40 +577,60 @@ sub TransactionStart {
     }
 
     # Check to see if this service exists
-    unless ( exists($heap->{'INTERFACES'}->{$service}) ) {
-		my $services = join(",",keys %{$heap->{'INTERFACES'}});
+    unless ( exists($heap->{'TREE'}->{$service}) ) {
+		my $services = join(",",keys %{$heap->{'TREE'}});
         $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', "Unknown service: $service - valid ones: [$services]");
         return;
     } else {
         debug("Found service $service to be valid.") if DEBUG;
     }
-
-	# Extract the key
-	my $key;
-	my @resources = split(/\//, $path);
-	if( $resources[-1] =~ m/\d+/) {
-		# only set if its a digit
-		$key = pop(@resources);
-		$key =~ s/^\///;
+    
+	# Validate the Type in TREE
+	unless( exists $heap->{TREE}->{$service}->{$type}) {
+		$kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', "There is no such type $type defined for the service $service");
+		return;
 	}
-	debug("Extracted key: ". ($key ? $key : '')) if DEBUG;
 
-    # Get the method
-    my $method = join("/", @resources);
-    $method  =~ s/\/$//;
-    $method = "$type$method";
+	# Find the farest-valid method, key and alias/event in tree
+	$path =~ s/^\///;
+	my @resources = split(/\//, $path);
+	my $tmp = $heap->{TREE}->{$service}->{$type};
+	my $leaf;
+	foreach my $key (@resources) {
+		debug("-- Probing $key") if DEBUG;
+		if( exists $tmp->{$key} ) {
+			$tmp = $tmp->{$key};
+			$leaf = $tmp->{$DEFAULT_NODE} if exists($tmp->{$DEFAULT_NODE});
+			debug("tmp leaf: ".$leaf->[1]) if DEBUG;
+		} 
+	}
+
+	# Validate extracted leaf
+	unless( $leaf ) {
+		$kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request', "Invalid method in hierarchy.");
+		return;
+	}
+	debug("Using leaf: ".Dumper($leaf)) if DEBUG;
+
+	# Get the method
+	my $method = $leaf->[1];
 	debug("Extracted method: $method") if DEBUG;
-
-
-    # Check to see if this method exists
+	
+	# Check to see if this method exists
     unless ( exists $heap->{'INTERFACES'}->{$service}->{$method} ) {
-        debug(" $method does not exists") if DEBUG;
+        debug("Method $method does not exists") if DEBUG;
         $kernel->yield( 'FAULT', $response, HTTP_BAD_REQUEST, 'Bad Request',
             "Unknown method: $method (Available: " . join( ",", keys %{ $heap->{'INTERFACES'}->{$service} } ) . ")",
         );
         return;
     }
 
+	# Extract the key
+	my $key = "$type/$path";
+	$key =~ s/$method//;
+	$key =~ s/^\///;
+	debug("Extracted key: ". ($key ? $key : '')) if DEBUG;
+    
     # Check for errors
     if ($@) {
         $kernel->yield( 'FAULT', $response, HTTP_INTERNAL_SERVER_ERROR, 'Application Faulted', "Some errors occured while processing the request: $@", );
@@ -607,7 +668,7 @@ sub TransactionStart {
 	debug("Received content: ".$request->content()."\n") if DEBUG;
 
     # Send it off to the handler!
-	my ( $alias, $event ) = @{ $heap->{'INTERFACES'}->{$service}->{$method} };
+	my ( $alias, $event ) = @$leaf;
     $kernel->post( $alias, $event, $response, $key );
 
     # Debugging stuff

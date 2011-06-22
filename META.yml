@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               POE-Component-Server-REST
-version:            1.06
+version:            1.07
 abstract:           ~
 author:  []
 license:            unknown

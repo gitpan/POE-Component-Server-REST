@@ -1,6 +1,27 @@
 Revision history for Perl extension POE::Component::Server::REST.
 
-SourceCode and diffs can be found on: https://github.com/jstebens/POE-Component-Server-REST
+SourceCode and diffs can be found on: 
+  https://github.com/jstebens/POE-Component-Server-REST
+
+Legend: 
+  F: Fixed 
+  E: Enhanced
+  N: New
+
+* 1.07
+  * (N) Added a hierarchical method tree with subpath delegation.
+    This allows ALL SORTS OF KEYS, not only numeric, for specific paths and its subpaths.
+    Setup: 
+		GET/library/author points to the method &get_author
+		GET/library/author/douglas/adams to &get_special_author
+	Example: 
+		Calling GET /library/author/douglas triggers the method &get_author with paramter "douglas"
+		Calling GET /library/author/douglas/adams/1979/10/12 triggers the method &get_special_author with parameter "1979/10/12"
+    Please see the examples/server.pl file for a working example.
+  * (F) Set DEBUG to false by default. Was turned on.
+  * (E) Reduced the complexity of the example server.
+  * (E) Changed the example in examples/server.pl to sth more daily like authors in a library.
+  * (E) Added example debug switch in the example server.
 
 * 1.06
   - Default content type is now JSON - see "Q: Why is JSON even supported?" in README/POD
