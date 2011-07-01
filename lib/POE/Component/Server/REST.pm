@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.08';
+our $VERSION = '1.09';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -16,7 +16,7 @@ use URI::Split qw(uri_split);
 use HTTP::Status qw(:constants);
 
 use XML::Simple;
-use YAML::Tiny;
+use YAML::Tiny qw(Load Dump);
 use JSON;
 
 # Our own modules
@@ -1076,9 +1076,9 @@ will be wrapped into a response structure like the following one:
 		content => $your_struct,
 	}
 
-This struct is then beeing marshalled into XML/YAML.
 
-The only thing left to do is send it off to the DONE event :)
+The only thing left to do is send it off to the DONE event 
+This struct is then beeing marshalled into whatever CONTENTTYPE you have specified.
 
 	$kernel->post( 'MyREST', 'DONE', $response );
 
