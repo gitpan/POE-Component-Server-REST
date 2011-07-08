@@ -4,7 +4,7 @@ use strict;
 use warnings;
 
 # Initialize our version
-our $VERSION = '1.09';
+our $VERSION = '1.10';
 
 # Set our stuff to SimpleHTTP::Response
 use base qw( POE::Component::Server::SimpleHTTP::Response );
@@ -24,7 +24,7 @@ sub restheaders {
       return shift->{'RESTHEADERS'};
 }
 
-# Accessor for REST Body
+# Accessor for the unmarshalled REST request
 sub restbody {
       return shift->{'RESTBODY'};
 }

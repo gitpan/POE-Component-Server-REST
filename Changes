@@ -8,6 +8,11 @@ Legend:
   E: Enhanced
   N: New
 
+* 1.10
+  - (F) The REST/Response.pm got the method injected into the RESTURI field instead of thecalled URI.
+  - (N) Added a small example method in the SYNOPSIS.
+  - (E) In DEBUG mode, the rest session now prints the unmarshalled content, makes it easier to identify if it was processed or not.
+
 * 1.09
   - Fixed Unmarshalling/Marshalling YAML, YAML::Tiny doesnt export Load/Dump by default, added imports.
 

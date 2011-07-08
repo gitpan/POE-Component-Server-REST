@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.09';
+our $VERSION = '1.10';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -641,6 +641,8 @@ sub TransactionStart {
     my $head_count = 1;
     my @headers    = ();
 
+	debug("Request content: ".$request->content()."\n") if DEBUG;
+
     # Extract the body
     my $body = unmarshall($request->content, $heap->{CONTENTTYPE});
 
@@ -654,18 +656,12 @@ sub TransactionStart {
     $response->{'RESTBODY'}    = $body;
     $response->{'RESTSERVICE'} = $service;
     $response->{'RESTREQUEST'} = $request;
-    $response->{'RESTURI'}     = $method;
-
-    # Make the headers undef if there is none
-    if ( scalar(@headers) ) {
-        $response->{'RESTHEADERS'} = \@headers;
-    } else {
-        $response->{'RESTHEADERS'} = undef;
-    }
+    $response->{'RESTURI'}     = $uri;
+	$response->{'RESTHEADERS'} = ( @headers ? \@headers : undef );
 
     # ReBless it ;)
     bless( $response, 'POE::Component::Server::REST::Response' );
-	debug("Received content: ".$request->content()."\n") if DEBUG;
+	debug("Unmarshalled content: ".Dumper($body)) if DEBUG;
 
     # Send it off to the handler!
 	my ( $alias, $event ) = @$leaf;
@@ -812,6 +808,7 @@ POE::Component::Server::REST is a solution kit for REST interfaces.
 	use POE::Component::Server::REST;
 	use HTTP::Status qw(:constants);
 	use Sys::Hostname;
+	use Try::Tiny;
 
 	# This is the POE..REST server
 	my $service = 'restservice';
@@ -844,7 +841,51 @@ POE::Component::Server::REST is a solution kit for REST interfaces.
 	POE::Kernel->run;
 	exit 0;
 
-	sub get_author { ... }
+	sub get_author {
+	    my ($kernel, $heap, $response, $key) = @_[KERNEL, HEAP, ARG0, ARG1];
+
+		try {
+			# Validate if the request was unmarshalled successfully.
+			# Only needed if you are interested in the request body.
+			my $body = $response->restbody;
+			unless ( $body ) {
+				$kernel->post( $service, 'FAULT', $response, HTTP_BAD_REQUEST, "Invalid Request", "Unable to parse your request."  );
+				return;
+			}
+
+			# Accessing the requests unmarshalled content.
+			# This option is optional, be sure to check hash-key  existance before accessing it.
+			my $unpopular;
+			if ( exists $body->{unpopular} ) {
+				$unpopular = $body->{unpopular};
+			}
+
+			# If unpopular is true, we inform that we have none.
+			if( $unpopular ) {
+				$kernel->post( $service, 'FAULT', $response, HTTP_NOT_FOUND, "NotFound", "Sry I dont have any unpopular authors."  );
+                return;
+			}
+
+			# Build answer
+			my $answer = { 
+				author => { 
+					id => 1, 
+					name => FooBar
+				}
+			};		
+		
+			# Set answer	
+			$response->content($answer);
+	
+			# Done
+			$kernel->post( $service, 'DONE', $response );
+			return;
+			
+		} catch {
+			$kernel->post( $service, 'FAULT', $response, HTTP_NOT_FOUND, "Error", $_  );
+		};
+	}
+
 	sub get_authors { ... }
 	sub get_special { ... }
 	sub add_author { ... }
@@ -1057,8 +1098,8 @@ Every request is pretty straightforward, you just get a Server::REST::Response o
 	Example information you can get:
 		$response->connection->remote_ip()      # IP of the client
 		$response->restrequest->uri()           # Original URI
-		$response->restmethod()                 # The SOAP method that was called
-		$response->restbody()                   # The arguments to the method
+		$response->restmethod()                 # The REST method that was called
+		$response->restbody()                   # The unmarshalled request content, is undef if unmarshalling failed.
 
 Simply experiment using Data::Dumper and you'll quickly get the hang of it!
 
@@ -1081,6 +1122,8 @@ The only thing left to do is send it off to the DONE event
 This struct is then beeing marshalled into whatever CONTENTTYPE you have specified.
 
 	$kernel->post( 'MyREST', 'DONE', $response );
+	OR
+	$kernel->post( 'MyREST', 'DONE', $response, 'Done', 'Successfully terminated your request.' );
 
 If there's an error, you can send it to the FAULT event, which will
 convert it into a REST fault.
