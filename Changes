@@ -8,6 +8,9 @@ Legend:
   E: Enhanced
   N: New
 
+* 1.11
+  - (F) Setting short/detail response string would overwrite non-true values with default values.
+
 * 1.10
   - (F) The REST/Response.pm got the method injected into the RESTURI field instead of thecalled URI.
   - (N) Added a small example method in the SYNOPSIS.

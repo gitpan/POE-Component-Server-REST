@@ -3,7 +3,7 @@ package POE::Component::Server::REST;
 use strict;
 use warnings;
 
-our $VERSION = '1.10';
+our $VERSION = '1.11';
 
 use Carp qw(croak confess cluck longmess);
 
@@ -733,8 +733,8 @@ sub TransactionDone {
 	$response->header( 'Content-Type', $heap->{CONTENTTYPE} );
 
 	# Set default for short and detail
-	$done_string = "Done" unless $done_string;
-	$done_detail = "Sucessfully terminated your request" unless $done_detail;	
+	$done_string = "Done" unless defined($done_string);
+	$done_detail = "Sucessfully terminated your request" unless defined($done_detail);	
 
 	# Build answer
 	$response->content( build_response($done_string, $done_detail, $response->content) );
